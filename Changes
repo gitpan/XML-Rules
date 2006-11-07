@@ -1,0 +1,14 @@
+Revision history for XML-Rules
+
+0.01	2006-10-9
+        First version, not released on an unsuspecting world.
+
+0.03	2006-10-29
+		First working version
+
+0.04	2006-11-06
+		Added support for '.attrname', '+attrname' and '*attrname'
+		Silenced POD and POD-coverage tests
+
+0.05	2006-11-07
+		Added "Start Tag" Rules to allow optional skipping of branches

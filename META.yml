@@ -1,0 +1,22 @@
+--- #YAML:1.0
+name: XML-Rules
+version: 0.05
+author:
+  - Jan Krynicky <Jenda@CPAN.org>
+abstract: |-
+  parse XML & process tags by rules starting from leaves
+license: perl
+resources:
+  license: http://dev.perl.org/licenses/
+build_requires:
+  Test::More: 0
+dynamic_config: 0
+provides:
+  XML::Rules:
+    file: lib/XML/Rules.pm
+    version: 0.05
+generated_by: Module::Build version 0.2805
+meta-spec:
+  url: |-
+    http://module-build.sourceforge.net/META-spec-v1.2.html
+  version: 1.2

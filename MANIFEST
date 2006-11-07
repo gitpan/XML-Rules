@@ -1,0 +1,19 @@
+Build.PL
+Changes
+MANIFEST
+META.yml # Will be created by "make dist"
+README
+lib/XML/Rules.pm
+t/00-load.t
+t/01-simple_xml.t
+t/boilerplate.t
+t/pod-coverage.t
+t/pod.t
+example/test.pl
+example/test2.pl
+example/test3.pl
+example/test4.pl
+example/test5.pl
+example/test6.pl
+example/test7.pl
+example/compute.pl
