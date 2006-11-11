@@ -12,3 +12,6 @@ Revision history for XML-Rules
 
 0.05	2006-11-07
 		Added "Start Tag" Rules to allow optional skipping of branches
+
+0.09	2006-11-12
+		Added filter mode

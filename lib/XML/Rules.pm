@@ -13,11 +13,11 @@ XML::Rules - parse XML & process tags by rules starting from leaves
 
 =head1 VERSION
 
-Version 0.08
+Version 0.09
 
 =cut
 
-our $VERSION = '0.08';
+our $VERSION = '0.09';
 
 =head1 SYNOPSIS
 
@@ -483,8 +483,26 @@ sub _End {
 						print {$self->{FH}} $self->{data}[-1]{_content};
 						delete $self->{data}[-1]{_content};
 					}
-					print {$self->{FH}} $self->toXML(@results) if @results;
-					@results = ();
+					while (@results) {
+						if (@results == 1) {
+							if (ref($results[0])) {
+								croak(ref($results[0]) . " not supported as the return value of a filter") unless ref($results[0]) eq 'ARRAY';
+								foreach my $item (@{$results[0]}) {
+									if (ref($item)) {
+										croak(ref($item) . " not supported in the return value of a filter") unless ref($item) eq 'ARRAY';
+										print {$self->{FH}} $self->toXML(@$item);
+									} else {
+										print {$self->{FH}} $self->escape_value($item);
+									}
+								}
+							} else {
+								print {$self->{FH}} $self->escape_value($results[0]);
+							}
+							@results = ();last;
+						} else {
+							print {$self->{FH}} $self->toXML(shift(@results), shift(@results));
+						}
+					}
 				}
 			}
 		} elsif ($self->{style} eq 'filter' and ! $self->{in_interesting}) {
@@ -735,11 +753,11 @@ You can also specify the default value in the constructor
 sub toXML {
 	my ($self, $tag, $attrs, $no_close) = @_;
 
-	my $content = delete($attrs->{_content});
+	my $content = $attrs->{_content};
 	my $result = "<$tag";
 	my $subtags = '';
 	foreach my $key (keys %$attrs) {
-		next if $key =~ /^:/;
+		next if $key =~ /^:/ or $key eq '_content';
 		if (ref $attrs->{$key}) {
 			if (ref $attrs->{$key} eq 'ARRAY') {
 				foreach my $subtag (@{$attrs->{$key}}) {
