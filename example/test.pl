@@ -53,6 +53,9 @@ my $parser = new XML::Rules (
 	# other options
 );
 
+use Data::Dumper;
+print Dumper($parser);
+
 print "About to parse\n";
 my $result = $parser->parsestring($xml);
 
