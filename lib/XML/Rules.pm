@@ -13,11 +13,11 @@ XML::Rules - parse XML & process tags by rules starting from leaves
 
 =head1 VERSION
 
-Version 0.09
+Version 0.13
 
 =cut
 
-our $VERSION = '0.09';
+our $VERSION = '0.13';
 
 =head1 SYNOPSIS
 
@@ -88,14 +88,18 @@ our $VERSION = '0.09';
 		rules => \@rules,
 		[ start_rules => \@start_rules, ]
 		[ style => 'parser' / 'filter', ]
+		[ encode => 'encoding specification', ]
 		# and optionaly parameters passed to XML::Parser::Expat
 	);
 
-Options passed to XML::Parser::Expat: ProtocolEncoding Namespaces NoExpand Stream_Delimiter ErrorContext ParseParamEnt Base
+Options passed to XML::Parser::Expat : ProtocolEncoding Namespaces NoExpand Stream_Delimiter ErrorContext ParseParamEnt Base
 
-The style specifies whether you want to build a parser used to extract stuff from the XML or filter/modify the XML. If you specify
+The "style" specifies whether you want to build a parser used to extract stuff from the XML or filter/modify the XML. If you specify
 style => 'filter' then all tags for which you do not specify a subroutine rule or that occure inside such a tag are copied to the output filehandle
 passed to the ->filter() or ->filterfile() methods.
+
+The "encode" allows you to ask the module to run all data through Encode::encode( 'encodnig_specification', ...)
+before being passed to the rules. Otherwise all data comes as UTF8.
 
 =head2 The Rules
 
@@ -264,6 +268,7 @@ sub new {
 
 	$self->{opt}{lc $_} = $params{$_} for keys %params;
 	$self->{style} = $params{style} || 'parser';
+	require 'Encode.pm' if $self->{opt}{encode};
 
 	return $self;
 }
@@ -309,6 +314,7 @@ sub _run {
 		Start => _Start($self),
 		End => _End($self),
 		Char => _Char($self),
+		XMLDecl => _XMLDecl($self),
 	);
 
 	$self->{data} = [];
@@ -361,8 +367,18 @@ sub filter {
 	croak("This XML::Rules object may only be used in as a filter!") unless ($self->{style} eq 'filter');
 
 	my $XML = shift;
-	$self->{FH} = shift || select(); # wither passed or the selected filehandle
+	$self->{FH} = shift || select(); # either passed or the selected filehandle
+	if (!ref($self->{FH})) { # yeah, select sometimes returns the name of the filehandle, not the filehandle itself. eg. "main::STDOUT"
+		no strict;
+		$self->{FH} = \*{$self->{FH}};
+	}
+	if ($self->{opt}{encode}) {
+		print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{encode}"?>\n};
+	} else {
+		print {$self->{FH}} qq{<?xml version="1.0"?>\n};
+	}
 	$self->_run($XML, @_);
+	print {$self->{FH}} "\n";
 	delete $self->{FH};
 }
 
@@ -373,14 +389,32 @@ sub filterfile {
 	my $filename = shift;
 	open my $IN, '<', $filename or croak "Cannot open '$filename' for reading: $^E";
 
-	$self->{FH} = shift || select(); # wither passed or the selected filehandle
+	$self->{FH} = shift || select(); # either passed or the selected filehandle
+	if (!ref($self->{FH})) {
+		no strict;
+		$self->{FH} = \*{$self->{FH}};
+	}
+	if ($self->{opt}{encode}) {
+		print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{encode}"?>\n};
+	} else {
+		print {$self->{FH}} qq{<?xml version="1.0"?>\n};
+	}
 	$self->_run($IN, @_);
+	print {$self->{FH}} "\n";
 	delete $self->{FH};
 }
 
+sub _XMLDecl {
+	my $self = shift;
+	return sub {
+		my ( $Parser, $Version, $Encoding, $Standalone) = @_;
+		$self->{opt}{original_encoding} = $Encoding
+	}
+}
 
 sub _Start {
 	my $self = shift;
+	my $encode = $self->{opt}{encode};
 	return sub {
 		my ( $Parser, $Element , %Attr) = @_;
 
@@ -405,23 +439,37 @@ sub _Start {
 				];
 				$self->{normal_handlers} = [$self->{parser}->setHandlers(@{$self->{ignore_handlers}})];
 			}
-			push @{$self->{ignore_context}}, $Element;
+			$self->{ignore_level}=1;
 
 		} else {
 			# process the tag and the ones below
+			if ($encode) {
+				foreach my $key (keys %Attr) {
+					$Attr{$key} = Encode::encode( $encode, $Attr{$key});
+				}
+			}
+
 			push @{$self->{context}}, $Element;
 			push @{$self->{data}}, \%Attr;
 
 			if ($self->{style} eq 'filter') {
-				if (! $self->{in_interesting}) {
+				if (! $self->{in_interesting}) { # if neither of the ancestors was interesting (had a specific rule) print its content so far
 					if (@{$self->{data}}>=2) {
-						print {$self->{FH}} $self->{data}->[-2]{_content};
+						print {$self->{FH}} $self->escape_value($self->{data}->[-2]{_content});
 						delete $self->{data}->[-2]{_content};
 					}
 				}
-				$self->{in_interesting}++ if ref($self->{rules}{$Element});
-				if (! $self->{in_interesting}) {
-					print {$self->{FH}} $self->toXML($Element, \%Attr, "don't close");
+
+				$self->{in_interesting}++ if ref($self->{rules}{$Element}); # is this tag interesting?
+
+				if (! $self->{in_interesting}) { # it neither this tag not an acestor is interesting, just copy the tag
+					if (! $encode) {
+						print {$self->{FH}} $self->{parser}->recognized_string();
+					} elsif ($encode eq $self->{opt}{original_encoding}) {
+						print {$self->{FH}} $self->{parser}->original_string();
+					} else {
+						print {$self->{FH}} $self->toXML($Element, \%Attr, "don't close");
+					}
 				}
 			}
 
@@ -447,8 +495,14 @@ sub _find_rule {
 
 sub _Char {
 	my $self = shift;
+	my $encode = $self->{opt}{encode};
 	return sub {
 		my ( $Parser, $String) = @_;
+
+		if ($encode) {
+			$String = Encode::encode( $encode, $String);
+		}
+
 		if (!exists $self->{data}[-1]{_content}) {
 			$self->{data}[-1]{_content} = $String;
 		} elsif (!ref $self->{data}[-1]{_content}) {
@@ -596,17 +650,15 @@ sub _End {
 sub _StartIgnore {
 	my ($self) = shift;
 	return sub {
-		push @{$self->{ignore_context}}, $_[1]; # push the element name
+		$self->{ignore_level}++
 	}
 }
 
 sub _EndIgnore {
 	my ($self) = shift;
 	return sub {
-		pop @{$self->{ignore_context}};
-		return if @{$self->{ignore_context}}; # there is still something left to pop
+		return if --$self->{ignore_level};
 
-		delete $self->{ignore_context};
 		$self->{parser}->setHandlers(@{$self->{normal_handlers}})
 	}
 }
@@ -750,9 +802,19 @@ You can also specify the default value in the constructor
 
 =cut
 
+sub ToXML;*ToXML=\&toXML;
 sub toXML {
 	my ($self, $tag, $attrs, $no_close) = @_;
 
+	if (! ref($attrs)) {
+		if ($no_close) {
+			return "<$tag>" . $self->escape_value($attrs);
+		} else {
+			return "<$tag>" . $self->escape_value($attrs) . "</$tag>";
+		}
+	} elsif (ref($attrs) eq 'ARRAY') {
+		return join( '', map $self->toXML($tag, $_, $no_close), @$attrs);
+	}
 	my $content = $attrs->{_content};
 	my $result = "<$tag";
 	my $subtags = '';
@@ -781,9 +843,9 @@ sub toXML {
 
 	} elsif (!ref($content)) {
 		if ($no_close) {
-			return "$result>$subtags$content";
+			return "$result>$subtags" . $self->escape_value($content);
 		} else {
-			return "$result>$subtags$content</$tag>";
+			return "$result>$subtags" . $self->escape_value($content) ."</$tag>";
 		}
 
 	} elsif (ref($content) eq 'ARRAY') {
@@ -798,7 +860,7 @@ sub toXML {
 					croak("Arrays in _content must be in format [\$tagname => \%attrs] in XML::Rules->toXML()!");
 				}
 			} else {
-				croak(ref($content) . " not supported in _content in XML::Rules->toXML()!");
+				croak(ref($snippet) . " not supported in _content in XML::Rules->toXML()!");
 			}
 		}
 		if ($no_close) {
@@ -836,7 +898,7 @@ sub closeParentsToXML {
 	}
 }
 
-=head2 toXML
+=head2 toXML / ToXML
 
 	$xml = $parser->toXML( $tagname, \%attrs[, $do_not_close])
 
@@ -858,6 +920,24 @@ for the constructor instead.
 	$xml = $parser->closeParentsToXML( [$level])
 
 Prints the closing tags for all or the topmost $level ancestor tags of the one currently processed.
+
+=head1 Properties
+
+=head2 parameters
+
+You can pass a parameter (scalar or reference) to the parse...() or filter...() methods, this parameter
+is later available to the rules as $parser->{parameters}. The module will never use this parameter for
+any other purpose so you are free to use it for any purposes provided that you expect it to be reset by
+each call to parse...() or filter...() first to the passed value and then, after the parsing is complete, to undef.
+
+=head2 pad
+
+The $parser->{pad} key is specificaly reserved by the module as a place where the module users can
+store their data. The module doesn't and will not use this key in any way, doesn't set or reset it under any
+circumstances. If you need to share some data between the rules and do not want to use the structure built
+by applying the rules you are free to use this key.
+
+You should refrain from modifying or accessing other properties of the XML::Rules object!
 
 =head1 HOW TO USE
 
