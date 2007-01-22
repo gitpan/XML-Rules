@@ -13,11 +13,11 @@ XML::Rules - parse XML & process tags by rules starting from leaves
 
 =head1 VERSION
 
-Version 0.13
+Version 0.14
 
 =cut
 
-our $VERSION = '0.13';
+our $VERSION = '0.14';
 
 =head1 SYNOPSIS
 
@@ -125,6 +125,9 @@ The action may be either
 	'content trim' = only the content of the tag is preserved, trimmed and added to
 		the parent tag's hash as an attribute named after the tag
 		sub { s/^\s+//,s/\s+$// for ($_[1]->{_content}); $_[0] => $_[1]->{_content}}
+	'content array' = only the content of the tag is preserved and pushed
+		to the array pointed to by the attribute
+		sub { '@' . $_[0] => $_[1]->{_content}}
 	'as is' = the tag's hash is added to the parent tag's hash
 		as an attribute named after the tag
 		sub { $_[0] => $_[1]}
@@ -371,6 +374,9 @@ sub filter {
 	if (!ref($self->{FH})) { # yeah, select sometimes returns the name of the filehandle, not the filehandle itself. eg. "main::STDOUT"
 		no strict;
 		$self->{FH} = \*{$self->{FH}};
+	} elsif (ref($self->{FH}) eq 'SCALAR') {
+		open my $FH, '>', $self->{FH};
+		$self->{FH} = $FH;
 	}
 	if ($self->{opt}{encode}) {
 		print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{encode}"?>\n};
@@ -393,6 +399,8 @@ sub filterfile {
 	if (!ref($self->{FH})) {
 		no strict;
 		$self->{FH} = \*{$self->{FH}};
+	} elsif (ref($self->{FH}) eq 'SCALAR') {
+		open $self->{FH}, '>', $self->{FH};
 	}
 	if ($self->{opt}{encode}) {
 		print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{encode}"?>\n};
@@ -569,6 +577,8 @@ sub _End {
 		} elsif ($rule eq 'content trim') {
 			s/^\s+//,s/\s+$// for ($data->{_content});
 			@results = ($Element => $data->{_content});
+		} elsif ($rule eq 'content array') {
+			@results = ('@'.$Element => $data->{_content});
 		} elsif ($rule eq 'as is') {
 			@results = ($Element => $data);
 		} elsif ($rule eq 'as is trim') {
@@ -725,10 +735,13 @@ the closing tags and returns the resulting structure.
 
 	$parser->filter( $string, $OutputIOhandle [, $parameters]);
 	$parser->filter( $InputIOhandle, $OutputIOhandle [, $parameters]);
+	$parser->filter( $string, $StringReference [, $parameters]);
+	$parser->filter( $InputIOhandle, $StringReference [, $parameters]);
 
 Parses the XML in the string or reads and parses the XML from the opened IO handle,
 copies the tags that do not have a subroutine rule specified and do not occure under such a tag,
-executes the specified rules and prints the results.
+executes the specified rules and prints the results to $OutputIOhandle or stores them in the scalar
+referenced by $StringReference.
 
 The scalar or reference passed as the third parameter to the filter() method is assigned to
 $parser->{parameters} for the parsing of the file or string. Once the XML is parsed the key is
@@ -736,7 +749,7 @@ deleted. This means that the $parser does not retain a reference to the $paramet
 
 =head2 filterstring
 
-	$parser->filterstring( $string, $OutputIOhandle [, $parameters]);
+	$parser->filterstring( ...);
 
 Just an alias to ->filter().
 

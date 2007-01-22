@@ -45,4 +45,5 @@ sub module_boilerplate_ok {
     );
 }
 
-module_boilerplate_ok('lib\XML\Rules.pm');
+use File::Spec;
+module_boilerplate_ok(File::Spec->catfile(qw(lib XML Rules.pm)));
