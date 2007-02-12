@@ -26,3 +26,12 @@ Revision history for XML-Rules
 0.14	2007-01-22
 		Fixed boilerplate.t
 		Simplified filtering into a string
+
+0.15	not sure
+		Added namespace handling
+
+0.16	not sure
+		Added pretty-printing
+
+0.17	2007-02-12
+		Finished the namespace handling and pretty-printing, including tests

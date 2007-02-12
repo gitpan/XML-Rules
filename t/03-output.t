@@ -2,7 +2,7 @@
 
 use strict;
 use warnings;
-use Test::More tests => 17;
+use Test::More tests => 39;
 use Data::Dumper;
 use Encode qw(encode);
 
@@ -16,6 +16,12 @@ my $xml = <<'*END*';
 	<baz>yyyy</baz>
 </data>
 *END*
+
+my $data_utf8 = "P\x{159}\x{ed}li\x{17e} \x{17e}lu\x{b4}tou\x{10d}k\x{fd} k\x{fa}\x{148} \x{fa}p\x{11b}l \x{161}\x{ed}len\x{e9} \x{f3}dy.";
+	# in case you wonder ... The crazy looking stuff above is a Czech sentence commonly used to test the encodings. It contains all accentuated characters used in Czech and still kinda makes sense.
+	# It translates as "Too yellow horse moaned crazy odes." I did say "kinda" ;-)
+my $data_windows = encode( 'windows-1250', $data_utf8);
+my $data_latin2 = encode( 'ISO-8859-2', $data_utf8);
 
 my $parser = XML::Rules->new(
 	rules => [
@@ -64,6 +70,70 @@ is( $xml, $new_xml, "Parse and output");
 	);
 }
 
+{
+	my $res = $parser->ToXML( 'data', '');
+	is( $res, '<data></data>', "Tag with empty string content");
+}
+
+{
+	my $res = $parser->ToXML( 'data', undef);
+	is( $res, '<data/>', "Tag with no content");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {});
+	is( $res, '<data/>', "Tag with no content");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {x => 5});
+	is( $res, '<data x="5"/>', "Tag with no content and one attribute");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {y => 10, x => 5, z => 99});
+	is( $res, '<data x="5" y="10" z="99"/>', "Tag with no content and three attributes");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {x => q{Jose "d'Artagnan" Razon}});
+	is( $res, q{<data x="Jose &quot;d'Artagnan&quot; Razon"/>}, "Tag with no content and one attribute that needs escaping");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {x => $data_utf8});
+	is( $res, qq{<data x="$data_utf8"/>}, "Tag with no content and one attribute with accents");
+}
+
+{ # rules: windows, output: utf8
+	my $parser = XML::Rules->new(
+		rules => [ _default => 'raw', ],
+		encode => 'windows-1250',
+		output_encoding => 'utf8',
+	);
+	my $res = $parser->ToXML( 'data', {x => $data_windows});
+	is( $res, qq{<data x="$data_utf8"/>}, "Tag with no content and one attribute with accents (windows->utf8)");
+}
+
+{ # rules: windows, output: latin2
+	my $parser = XML::Rules->new(
+		rules => [ _default => 'raw', ],
+		encode => 'windows-1250',
+		output_encoding => 'ISO-8859-2',
+	);
+	my $res = $parser->ToXML( 'data', {x => $data_windows});
+	is( $res, qq{<data x="$data_latin2"/>}, "Tag with no content and one attribute with accents (windows->latin2)");
+}
+
+{ # rules: utf8, output: latin2
+	my $parser = XML::Rules->new(
+		rules => [ _default => 'raw', ],
+		encode => 'UTF8',
+		output_encoding => 'ISO-8859-2',
+	);
+	my $res = $parser->ToXML( 'data', {x => $data_utf8});
+	is( $res, qq{<data x="$data_latin2"/>}, "Tag with no content and one attribute with accents (utf8->latin2)");
+}
 
 {
 	my $res = $parser->ToXML( 'data', [qw(foo bar baz)]);
@@ -120,4 +190,69 @@ is( $xml, $new_xml, "Parse and output");
 {
 	my $res = $parser->ToXML( 'data', {_content => ['start', [str => 'foo'], 'middle', [str => 'bar'], [str => 'baz'], 'end']});
 	is( $res, '<data>start<str>foo</str>middle<str>bar</str><str>baz</str>end</data>', "Tag with mix of text content and subtags");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {
+		at => '5',
+		sub => {_content => 'SUBTAG'},
+		_content => ['start', [str => 'foo'], 'middle', [str => 'bar'], [str => 'baz'], 'end']
+	});
+	is( $res, '<data at="5"><sub>SUBTAG</sub>start<str>foo</str>middle<str>bar</str><str>baz</str>end</data>', "Tag with an attribute, subtag in attribute and mix of text content and subtags");
+}
+
+# pretty-printing
+{
+	my $res = $parser->ToXML( 'data', '', 0, '  ', '    ');
+	is( $res, "<data></data>", "Tag with empty string content (pretty-print)");
+}
+
+{
+	my $res = $parser->ToXML( 'data', undef, 0, '  ', '    ');
+	is( $res, "<data/>", "Tag with no content (pretty-print)");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {}, 0, '  ', '    ');
+	is( $res, "<data/>", "Tag with no content (pretty-print)");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {x => 5}, 0, '  ', '    ');
+	is( $res, qq{<data x="5"/>}, "Tag with no content and one attribute (pretty-print)");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {y => 10, x => 5, z => 99}, 0, '  ', '    ');
+	is( $res, qq{<data x="5" y="10" z="99"/>}, "Tag with no content and three attributes (pretty-print)");
+}
+
+{
+	my $res = $parser->ToXML( 'data', [qw(foo bar baz)], 0, '  ', '    ');
+	is( $res, qq{<data>foo</data>\n    <data>bar</data>\n    <data>baz</data>}, "Tag with array of contents (pretty-print)");
+}
+
+{
+	my $res = $parser->ToXML( 'data', [{str => 'foo'}, {str => 'bar'}, {str => 'baz'}], 0, '  ', '    ');
+	is( $res, qq{<data str="foo"/>\n    <data str="bar"/>\n    <data str="baz"/>}, "Tag with array of attributes (pretty-print)");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {bar => {_content => 'baz'}}, 0, '  ', '    ');
+	is( $res, qq{<data>\n      <bar>baz</bar>\n    </data>}, "Tag with subtag (pretty-print)");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {bar => {}}, 0, '  ', '    ');
+	is( $res, qq{<data>\n      <bar/>\n    </data>}, "Tag with empty subtag (pretty-print)");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {attr => 5, bar => {}}, 0, '  ', '    ');
+	is( $res, qq{<data attr="5">\n      <bar/>\n    </data>}, "Tag with attribute and empty subtag (pretty-print)");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {attr => 5, bar => {a => 42, _content=> 'string'}}, 0, '  ', '    ');
+	is( $res, qq{<data attr="5">\n      <bar a="42">string</bar>\n    </data>}, "Tag with attribute and subtag with content and attribute (pretty-print)");
 }

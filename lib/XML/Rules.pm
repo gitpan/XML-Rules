@@ -13,11 +13,11 @@ XML::Rules - parse XML & process tags by rules starting from leaves
 
 =head1 VERSION
 
-Version 0.14
+Version 0.17
 
 =cut
 
-our $VERSION = '0.14';
+our $VERSION = '0.17';
 
 =head1 SYNOPSIS
 
@@ -79,7 +79,7 @@ our $VERSION = '0.14';
 		},
 	);
 	$parser = XML::Rules->new(rules => \@rules);
-	$parser->Parse( $xml);
+	$parser->parse( $xml);
 
 
 =head1 CONSTRUCTOR
@@ -88,7 +88,10 @@ our $VERSION = '0.14';
 		rules => \@rules,
 		[ start_rules => \@start_rules, ]
 		[ style => 'parser' / 'filter', ]
+		[ ident => '  ', [reformat_all => 0 / 1] ],
 		[ encode => 'encoding specification', ]
+		[ output_encoding => 'encoding specification', ]
+		[ namespaces => \%namespace2alias_mapping, ]
 		# and optionaly parameters passed to XML::Parser::Expat
 	);
 
@@ -98,8 +101,25 @@ The "style" specifies whether you want to build a parser used to extract stuff f
 style => 'filter' then all tags for which you do not specify a subroutine rule or that occure inside such a tag are copied to the output filehandle
 passed to the ->filter() or ->filterfile() methods.
 
-The "encode" allows you to ask the module to run all data through Encode::encode( 'encodnig_specification', ...)
+The "ident" specifies what character(s) to use to ident the tags when filtering, by default the tags are not formatted in any way. If the
+"reformat_all" is not set then this affects only the tags that have a rule and their subtags. And in case of subtags only those that were
+added into the attribute hash by their rules, not those left in the _content array!
+
+The "encode" allows you to ask the module to run all data through Encode::encode( 'encoding_specification', ...)
 before being passed to the rules. Otherwise all data comes as UTF8.
+
+The "output_encoding" on the other hand specifies in what encoding is the resulting data going to be, the default is again UTF8.
+This means that if you specify
+
+	encode => 'windows-1250',
+	output_encoding => 'utf8',
+
+and the XML is in ISO-8859-2 (Latin2) then the filter will 1) convert the content and attributes of the tags you are not interested in from Latin2
+directly to utf8 and output and 2) convert the content and attributes of the tags you want to process from Latin2 to Windows-1250, let you mangle
+the data and then convert the results to utf8 for the output.
+
+The C<encode> and C<output_enconding> affects also the C<$parser->toXML(...)>, if they are different then the data are converted from
+one encoding to the other.
 
 =head2 The Rules
 
@@ -162,6 +182,8 @@ The action may be either
 		and the attrs are added to the parent's attribute hash with ":$tagname" as the key
 		sub { (':'.$Element => $data, [$Element => $data])};
 
+You may also add " no xmlns" at the end of all those predefined rules to strip the namespace
+alias from the $Element.
 
 The subroutines in the rules specification receive five parameters:
 
@@ -269,9 +291,22 @@ sub new {
 		}
 	}
 
+	$self->{namespaces} = delete($params{namespaces});
+	if (defined($self->{namespaces})) {
+		croak 'XML::Rules->new( ... , namespaces => ...HERE...) must be a hash reference!'
+			unless ref($self->{namespaces}) eq 'HASH';
+		$self->{xmlns_map} = {};
+	}
+
+	$self->{style} = delete($params{style}) || 'parser';
+
 	$self->{opt}{lc $_} = $params{$_} for keys %params;
-	$self->{style} = $params{style} || 'parser';
+
+	delete $self->{opt}{encode} if $self->{opt}{encode} =~ /^utf-?8$/i;
+	delete $self->{opt}{output_encoding} if $self->{opt}{output_encoding} =~ /^utf-?8$/i;
+
 	require 'Encode.pm' if $self->{opt}{encode};
+	require 'Encode.pm' if $self->{opt}{output_encoding};
 
 	return $self;
 }
@@ -322,7 +357,14 @@ sub _run {
 
 	$self->{data} = [];
 	$self->{context} = [];
-	$self->{parser}->parse($string);
+
+	if (! eval {
+		$self->{parser}->parse($string) and 1;
+	}) {
+		my $err = $@;
+		$err =~ s/at \S+Rules.pm line \d+$//;
+		croak $err;
+	};
 
 	delete $self->{normal_handlers};
 	delete $self->{ignore_handlers};
@@ -378,8 +420,8 @@ sub filter {
 		open my $FH, '>', $self->{FH};
 		$self->{FH} = $FH;
 	}
-	if ($self->{opt}{encode}) {
-		print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{encode}"?>\n};
+	if ($self->{opt}{output_encoding}) {
+		print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{output_encoding}"?>\n};
 	} else {
 		print {$self->{FH}} qq{<?xml version="1.0"?>\n};
 	}
@@ -402,8 +444,8 @@ sub filterfile {
 	} elsif (ref($self->{FH}) eq 'SCALAR') {
 		open $self->{FH}, '>', $self->{FH};
 	}
-	if ($self->{opt}{encode}) {
-		print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{encode}"?>\n};
+	if ($self->{opt}{output_encoding}) {
+		print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{output_encoding}"?>\n};
 	} else {
 		print {$self->{FH}} qq{<?xml version="1.0"?>\n};
 	}
@@ -423,8 +465,74 @@ sub _XMLDecl {
 sub _Start {
 	my $self = shift;
 	my $encode = $self->{opt}{encode};
+	my $output_encoding = $self->{opt}{output_encoding};
 	return sub {
 		my ( $Parser, $Element , %Attr) = @_;
+
+		if ($self->{namespaces}) {
+			my %restore;
+			if (exists $Attr{xmlns}) { # find the default namespace
+#print "Found a xmlns attribute in $Element!\n";
+				$restore{''} = $self->{xmlns_map}{''};
+				if (!exists($self->{namespaces}{ $Attr{xmlns} })) {
+					warn qq{Unexpected namespace "$Attr{xmlns}" found in the XML!\n};
+					delete $self->{xmlns_map}{''};
+					delete $restore{''} unless defined($restore{''});
+					delete($Attr{xmlns});
+				} else {
+					$self->{xmlns_map}{''} = $self->{namespaces}{ delete($Attr{xmlns}) };
+				}
+			}
+			foreach my $attr (keys %Attr) { # find the namespace aliases
+				next unless $attr =~ /^xmlns:(.*)$/;
+				$restore{$1} = $self->{xmlns_map}{$1};
+				if (!exists($self->{namespaces}{ $Attr{$attr} })) {
+					warn qq{Unexpected namespace "$Attr{$attr}" found in the XML!\n};
+					delete $self->{xmlns_map}{$1};
+					delete $restore{$1} unless defined($restore{$1});
+					delete($Attr{$attr});
+				} else {
+					$self->{xmlns_map}{$1} = $self->{namespaces}{ delete($Attr{$attr}) };
+				}
+			}
+			if (%restore) {
+				push @{$self->{xmlns_restore}}, \%restore;
+			} else {
+				push @{$self->{xmlns_restore}}, undef;
+			}
+
+			if (%{$self->{xmlns_map}}) {
+#print "About to map aliases for $Element\n";
+				# add or map the alias for the tag
+				if ($Element =~ /^([^:]+):(.*)$/) {
+#print "Mapping an alias $1 for tag $Element\n";
+					if (exists($self->{xmlns_map}{$1})) {
+						if ($self->{xmlns_map}{$1} eq '') {
+							$Element = $2 ;
+						} else {
+							$Element = $self->{xmlns_map}{$1} . ':' . $2 ;
+						}
+					}
+#print " -> $Element\n";
+				} elsif (defined($self->{xmlns_map}{''}) and $self->{xmlns_map}{''} ne '') { # no namespace alias in the tag and there's a default
+#print "Adding default alias $self->{xmlns_map}{''}:\n";
+					$Element = $self->{xmlns_map}{''} . ':' . $Element;
+#print " -> $Element\n";
+				}
+
+				# map the aliases for the attributes
+				foreach my $attr (keys %Attr) {
+					next unless $attr =~ /^([^:]+):(.*)$/; # there's an alias
+					next unless exists($self->{xmlns_map}{$1}); # and there's a mapping
+					if ($self->{xmlns_map}{$1} eq '') {
+						$Attr{$2} = delete($Attr{$attr}); # rename the attribute
+					} else {
+						$Attr{$self->{xmlns_map}{$1} . ':' . $2} = delete($Attr{$attr}); # rename the attribute
+					}
+				}
+			}
+		} # /of namespace handling
+
 
 		$self->_find_rule( 'start_rules', $Element, 'handle') if (! exists $self->{start_rules}{$Element});
 		$self->_find_rule( 'rules', $Element, 'as is') if (! exists $self->{rules}{$Element});
@@ -452,8 +560,8 @@ sub _Start {
 		} else {
 			# process the tag and the ones below
 			if ($encode) {
-				foreach my $key (keys %Attr) {
-					$Attr{$key} = Encode::encode( $encode, $Attr{$key});
+				foreach my $value (values %Attr) {
+					$value = Encode::encode( $encode, $value);
 				}
 			}
 
@@ -471,9 +579,9 @@ sub _Start {
 				$self->{in_interesting}++ if ref($self->{rules}{$Element}); # is this tag interesting?
 
 				if (! $self->{in_interesting}) { # it neither this tag not an acestor is interesting, just copy the tag
-					if (! $encode) {
+					if (! $output_encoding) {
 						print {$self->{FH}} $self->{parser}->recognized_string();
-					} elsif ($encode eq $self->{opt}{original_encoding}) {
+					} elsif ($output_encoding eq $self->{opt}{original_encoding}) {
 						print {$self->{FH}} $self->{parser}->original_string();
 					} else {
 						print {$self->{FH}} $self->toXML($Element, \%Attr, "don't close");
@@ -529,7 +637,19 @@ sub _End {
 	my $self = shift;
 	return sub {
 		my ( $Parser, $Element) = @_;
-		pop @{$self->{context}};
+		$Element = pop @{$self->{context}}; # the element name may have been mangled by XMLNS aliasing
+
+		if ($self->{namespaces}) {
+			if (my $restore = pop @{$self->{xmlns_restore}}) { # restore the old default namespace and/or alias mapping
+				while (my ($their, $our)  = each %$restore) {
+					if (defined($our)) {
+						$self->{xmlns_map}{$their} = $our;
+					} else {
+						delete $self->{xmlns_map}{$their};
+					}
+				}
+			}
+		}
 
 		my $rule = exists ($self->{rules}{$Element}) ? $self->{rules}{$Element} : $self->{rules}{_default};
 		my $data = pop @{$self->{data}};
@@ -545,24 +665,34 @@ sub _End {
 						print {$self->{FH}} $self->{data}[-1]{_content};
 						delete $self->{data}[-1]{_content};
 					}
+					my $base;
+					if ($self->{opt}{ident} ne '') {
+						$base = $self->{opt}{ident} x scalar(@{$self->{context}});
+					}
 					while (@results) {
-						if (@results == 1) {
-							if (ref($results[0])) {
-								croak(ref($results[0]) . " not supported as the return value of a filter") unless ref($results[0]) eq 'ARRAY';
-								foreach my $item (@{$results[0]}) {
-									if (ref($item)) {
-										croak(ref($item) . " not supported in the return value of a filter") unless ref($item) eq 'ARRAY';
+						if (ref($results[0])) {
+							croak(ref($results[0]) . " not supported as the return value of a filter") unless ref($results[0]) eq 'ARRAY';
+							foreach my $item (@{$results[0]}) {
+								if (ref($item)) {
+									croak(ref($item) . " not supported in the return value of a filter") unless ref($item) eq 'ARRAY';
+									croak("Empty array not supported in the return value of a filter") unless @$item;
+									if (@$item <= 2) {
+										print {$self->{FH}} $self->toXML(@{$item}[0,1], 0, $self->{opt}{ident}, $base);
+									} else { # we suppose the 3rd and following elements are parameters to ->toXML()
 										print {$self->{FH}} $self->toXML(@$item);
-									} else {
-										print {$self->{FH}} $self->escape_value($item);
 									}
+								} else {
+									print {$self->{FH}} $self->escape_value($item);
 								}
-							} else {
-								print {$self->{FH}} $self->escape_value($results[0]);
 							}
-							@results = ();last;
+							shift(@results);
 						} else {
-							print {$self->{FH}} $self->toXML(shift(@results), shift(@results));
+							if (@results == 1) {
+								print {$self->{FH}} $self->escape_value($results[0]);
+								@results = ();last;
+							} else {
+								print {$self->{FH}} $self->toXML(shift(@results), shift(@results), 0, $self->{opt}{ident}, $base);
+							}
 						}
 					}
 				}
@@ -570,46 +700,52 @@ sub _End {
 		} elsif ($self->{style} eq 'filter' and ! $self->{in_interesting}) {
 			print {$self->{FH}} "$data->{_content}</$Element>";
 
-		} elsif ($rule eq '') {
-			@results = ();
-		} elsif ($rule eq 'content') {
-			@results = ($Element => $data->{_content});
-		} elsif ($rule eq 'content trim') {
-			s/^\s+//,s/\s+$// for ($data->{_content});
-			@results = ($Element => $data->{_content});
-		} elsif ($rule eq 'content array') {
-			@results = ('@'.$Element => $data->{_content});
-		} elsif ($rule eq 'as is') {
-			@results = ($Element => $data);
-		} elsif ($rule eq 'as is trim') {
-			s/^\s+//,s/\s+$// for ($data->{_content});
-			@results = ($Element => $data);
-		} elsif ($rule eq 'as array') {
-			@results = ('@'.$Element => $data);
-		} elsif ($rule eq 'as array trim') {
-			s/^\s+//,s/\s+$// for ($data->{_content});
-			@results = ('@'.$Element => $data);
-		} elsif ($rule eq 'no content') {
-			delete ${$data}{_content}; @results = ($Element => $data);
-		} elsif ($rule eq 'no content array' or $rule eq 'as array no content') {
-			delete ${$data}{_content}; @results = ('@' . $Element => $data);
+		} else { # a predefined rule
+			if ($rule =~ s/ no xmlns$//) {
+				$Element =~ s/^\w+://;
+			}
 
-		} elsif ($rule eq 'pass') {
-			@results = (%$data);
-		} elsif ($rule eq 'pass trim') {
-			s/^\s+//,s/\s+$// for ($data->{_content});
-			@results = (%$data);
-		} elsif ($rule eq 'pass no content' or $rule eq 'pass without content') {
-			delete ${$data}{_content}; @results = (%$data);
+			if ($rule eq '') {
+				@results = ();
+			} elsif ($rule eq 'content') {
+				@results = ($Element => $data->{_content});
+			} elsif ($rule eq 'content trim') {
+				s/^\s+//,s/\s+$// for ($data->{_content});
+				@results = ($Element => $data->{_content});
+			} elsif ($rule eq 'content array') {
+				@results = ('@'.$Element => $data->{_content});
+			} elsif ($rule eq 'as is') {
+				@results = ($Element => $data);
+			} elsif ($rule eq 'as is trim') {
+				s/^\s+//,s/\s+$// for ($data->{_content});
+				@results = ($Element => $data);
+			} elsif ($rule eq 'as array') {
+				@results = ('@'.$Element => $data);
+			} elsif ($rule eq 'as array trim') {
+				s/^\s+//,s/\s+$// for ($data->{_content});
+				@results = ('@'.$Element => $data);
+			} elsif ($rule eq 'no content') {
+				delete ${$data}{_content}; @results = ($Element => $data);
+			} elsif ($rule eq 'no content array' or $rule eq 'as array no content') {
+				delete ${$data}{_content}; @results = ('@' . $Element => $data);
 
-		} elsif ($rule eq 'raw') {
-			@results = [$Element => $data];
+			} elsif ($rule eq 'pass') {
+				@results = (%$data);
+			} elsif ($rule eq 'pass trim') {
+				s/^\s+//,s/\s+$// for ($data->{_content});
+				@results = (%$data);
+			} elsif ($rule eq 'pass no content' or $rule eq 'pass without content') {
+				delete ${$data}{_content}; @results = (%$data);
 
-		} elsif ($rule eq 'raw extended') {
-			@results = (':'.$Element => $data, [$Element => $data]);
+			} elsif ($rule eq 'raw') {
+				@results = [$Element => $data];
 
-		} else {
-			croak "Unknown predefined rule '$rule'!";
+			} elsif ($rule eq 'raw extended') {
+				@results = (':'.$Element => $data, [$Element => $data]);
+
+			} else {
+				croak "Unknown predefined rule '$rule'!";
+			}
 		}
 
 		return unless scalar(@results) or scalar(@results) == 1 and ($results[0] eq '' or !defined($results[0]));
@@ -763,19 +899,24 @@ the closing tags and returns the resulting structure.
 =cut
 
 sub escape_value {
-  my($self, $data, $level) = @_;
+	my($self, $data, $level) = @_;
 
-  return '' unless(defined($data) and $data ne '');
+	return '' unless(defined($data) and $data ne '');
 
-  $data =~ s/&/&amp;/sg;
-  $data =~ s/</&lt;/sg;
-  $data =~ s/>/&gt;/sg;
-  $data =~ s/"/&quot;/sg;
+	if ($self->{opt}{output_encoding} ne $self->{opt}{encode}) {
+		$data = Encode::decode( $self->{opt}{encode}, $data) if $self->{opt}{encode};
+		$data = Encode::encode( $self->{opt}{output_encoding}, $data) if $self->{opt}{output_encoding};
+	}
 
-  $level = $self->{opt}->{numericescape} unless defined $level;
-  return $data unless $level;
+	$data =~ s/&/&amp;/sg;
+	$data =~ s/</&lt;/sg;
+	$data =~ s/>/&gt;/sg;
+	$data =~ s/"/&quot;/sg;
 
-  return $self->_numeric_escape($data, $level);
+	$level = $self->{opt}->{numericescape} unless defined $level;
+	return $data unless $level;
+
+	return $self->_numeric_escape($data, $level);
 }
 
 sub _numeric_escape {
@@ -817,29 +958,36 @@ You can also specify the default value in the constructor
 
 sub ToXML;*ToXML=\&toXML;
 sub toXML {
-	my ($self, $tag, $attrs, $no_close) = @_;
+	my ($self, $tag, $attrs, $no_close, $ident, $base) = @_;
 
-	if (! ref($attrs)) {
+	my $prefix = (defined ($ident) ? "\n$base" : '');
+
+	$attrs = undef if (ref $attrs eq 'HASH' and ! %{$attrs}); # ->toXML( $tagname, {}, ...)
+
+	if (! ref($attrs)) { # ->toXML( $tagname, $string_content, ...)
 		if ($no_close) {
 			return "<$tag>" . $self->escape_value($attrs);
+		} elsif (! defined $attrs) {
+			return "<$tag/>";
 		} else {
 			return "<$tag>" . $self->escape_value($attrs) . "</$tag>";
 		}
 	} elsif (ref($attrs) eq 'ARRAY') {
-		return join( '', map $self->toXML($tag, $_, $no_close), @$attrs);
+		return join( $prefix, map $self->toXML($tag, $_, 0, $ident, $base), @$attrs);
 	}
+
 	my $content = $attrs->{_content};
 	my $result = "<$tag";
 	my $subtags = '';
-	foreach my $key (keys %$attrs) {
+	foreach my $key (sort keys %$attrs) {
 		next if $key =~ /^:/ or $key eq '_content';
 		if (ref $attrs->{$key}) {
 			if (ref $attrs->{$key} eq 'ARRAY') {
 				foreach my $subtag (@{$attrs->{$key}}) {
-					$subtags .= $self->toXML($key, $subtag);
+					$subtags .= $prefix . $ident . $self->toXML($key, $subtag, 0, $ident, $base.$ident);
 				}
 			} elsif (ref $attrs->{$key} eq 'HASH') {
-				$subtags .= $self->toXML($key, $attrs->{$key})
+				$subtags .= $prefix . $ident . $self->toXML($key, $attrs->{$key}, 0, $ident, $base.$ident)
 			} else {
 				croak(ref($attrs->{$key}) . " attributes not supported in XML::Rules->toXML()!");
 			}
@@ -854,15 +1002,17 @@ sub toXML {
 			return $result."/>";
 		}
 
-	} elsif (!ref($content)) {
+	} elsif (!ref($content)) { # content is a string, not an array of strings and subtags
 		if ($no_close) {
 			return "$result>$subtags" . $self->escape_value($content);
+		} elsif ($content eq '' and $subtags ne '') {
+			return "$result>$subtags$prefix</$tag>";
 		} else {
 			return "$result>$subtags" . $self->escape_value($content) ."</$tag>";
 		}
 
 	} elsif (ref($content) eq 'ARRAY') {
-		$result .= ">";
+		$result .= ">$subtags";
 		foreach my $snippet (@$content) {
 			if (!ref($snippet)) {
 				$result .= $self->escape_value($snippet);
@@ -870,7 +1020,7 @@ sub toXML {
 				if (@$snippet == 2) {
 					$result .= $self->toXML($snippet->[0], $snippet->[1]);
 				} else {
-					croak("Arrays in _content must be in format [\$tagname => \%attrs] in XML::Rules->toXML()!");
+					croak("Arrays in _content must be in format [\$tagname => \\\%attrs, ...] in XML::Rules->toXML()!");
 				}
 			} else {
 				croak(ref($snippet) . " not supported in _content in XML::Rules->toXML()!");
@@ -913,10 +1063,27 @@ sub closeParentsToXML {
 
 =head2 toXML / ToXML
 
-	$xml = $parser->toXML( $tagname, \%attrs[, $do_not_close])
+	$xml = $parser->toXML( $tagname, \%attrs[, $do_not_close, $ident, $base])
 
 You may use this method to convert the datastructures created by parsing the XML into the XML format.
-Not all data structures may be printed! I'll add more docs later, for not please do experiment.
+Not all data structures may be printed! I'll add more docs later, for now please do experiment.
+
+The $ident and $base, if defined, turn on and control the pretty-printing. The $ident specifies the character(s)
+used for one level of identation, the base contains the identation of the current tag. That is if you want to include the data inside of
+
+	<data>
+		<some>
+			<subtag>$here</subtag>
+		</some>
+	</data>
+
+you will call
+
+	$parser->toXML( $tagname, \%attrs, 0, "\t", "\t\t\t");
+
+The method does NOT validate that the $ident and $base are whitespace only, but of course if it's not you end up with invalid
+XML. Newlines are added only before the start tag and (if the tag has only child tags and no content) before the closing tag,
+but not after the closing tag! Newlines are added even if the $ident is an empty string.
 
 =head2 parentsToXML
 
@@ -951,6 +1118,69 @@ circumstances. If you need to share some data between the rules and do not want 
 by applying the rules you are free to use this key.
 
 You should refrain from modifying or accessing other properties of the XML::Rules object!
+
+=head1 Namespace support
+
+By default the module doesn't handle namespaces in any way, it doesn't check for
+xmlns or xmlns:alias attributes and it doesn't strip or mangle the namespace aliases
+in tag or attribute names. This means that if you know for sure what namespace
+aliases will be used you can set up rules for tags including the aliases and unless
+someone decides to use a different alias or makes use of the default namespace
+change your script will work.
+
+If you do specify any namespace to alias mapping in the constructor it does
+start processing the namespace stuff. The xmlns and xmlns:alias attributes
+are stripped from the datastructures and the aliases are transformed from
+whatever the XML author decided to use to whatever your namespace mapping
+specifies. Aliases are also added to all tags that belong to a default namespace.
+
+Assuming the constructor parameters contain
+
+	namespaces => {
+		'http://my.namespaces.com/foo' => 'foo',
+		'http://my.namespaces.com/bar' => 'bar',
+	}
+
+and the XML looks like this:
+
+	<root>
+		<Foo xmlns="http://my.namespaces.com/foo">
+			<subFoo>Hello world</subfoo>
+		</Foo>
+		<other xmlns:b="http://my.namespaces.com/bar">
+			<b:pub>
+				<b:name>NaRuzku</b:name>
+				<b:address>at any crossroads</b:address>
+				<b:desc>Fakt <b>desnej</b> pajzl.</b:desc>
+			</b:pub>
+		</other>
+	</root>
+
+then the rules wil be called as if the XML looked like this:
+
+	<root>
+		<foo:Foo>
+			<foo:subFoo>Hello world</foo:subfoo>
+		</foo:Foo>
+		<other>
+			<bar:pub>
+				<bar:name>NaRuzku</bar:name>
+				<bar:address>at any crossroads</bar:address>
+				<bar:desc>Fakt <b>desnej</b> pajzl.</bar:desc>
+			</bar:pub>
+		</other>
+	</root>
+
+
+This means that the namespace handling will only normalize the aliases used.
+
+It is possible to specify an empty alias, so eg. in case you are processing a SOAP XML
+and know the tags defined by SOAP do not colide with the tags in the enclosed XML
+you may simplify the parsing by removing all namespace aliases.
+
+If the XML references a namespace not present in the map you will get a warning
+and the alias used for that namespace will be left intact!
+
 
 =head1 HOW TO USE
 
