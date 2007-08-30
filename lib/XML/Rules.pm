@@ -5,6 +5,10 @@ no warnings qw(uninitialized);
 use strict;
 use Carp;
 
+require Exporter;
+our @ISA = qw(Exporter);
+our @EXPORT_OK = qw(paths2rules);
+
 use XML::Parser::Expat;
 
 =head1 NAME
@@ -13,17 +17,17 @@ XML::Rules - parse XML & process tags by rules starting from leaves
 
 =head1 VERSION
 
-Version 0.18
+Version 0.20
 
 =cut
 
-our $VERSION = '0.18';
+our $VERSION = '0.20';
 
 =head1 SYNOPSIS
 
     use XML::Rules;
 
-	$xml = <<'*END*'
+	$xml = <<'*END*';
 	<doc>
 	 <person>
 	  <fname>...</fname>
@@ -65,7 +69,7 @@ our $VERSION = '0.18';
 			# let's ignore this tag and all inner ones as well
 		address => sub {address => "$_[1]->{street}, $_[1]->{city} ($_[1]->{country})"},
 			# merge the address into a single string
-		phone => sub {$_[1]->{type} => $_[1]->{content}},
+		phone => sub {$_[1]->{type} => $_[1]->{_content}},
 			# let's use the "type" attribute as the key and the content as the value
 		phones => sub {delete $_[1]->{_content}; %{$_[1]}},
 			# remove the text content and pass along the type => content from the child nodes
@@ -181,6 +185,14 @@ The action may be either
 	'raw extended' = the [tagname => attrs] is pushed to the parent tag's _content
 		and the attrs are added to the parent's attribute hash with ":$tagname" as the key
 		sub { (':'.$Element => $data, [$Element => $data])};
+	'raw extended array' = the [tagname => attrs] is pushed to the parent tag's _content
+		and the attrs are pushed to the parent's attribute hash with ":$tagname" as the key
+		sub { ('@:'.$Element => $data, [$Element => $data])};
+	'==...' = replace the tag by the specified string. That is the string will be added to
+		the parent tag's _content
+		sub { return '...' }
+	'=...' = replace the tag contents by the specified string and forget the attributes.
+		sub { return $_[0] => '...' }
 
 You may also add " no xmlns" at the end of all those predefined rules to strip the namespace
 alias from the $Element.
@@ -233,6 +245,19 @@ appended to the current value and the ones starting with '*' are multiplied by t
 
 5) an odd numbered list - the last element is appended or push()ed to the parent's _content, the rest is handled as in the previous case.
 
+
+Since 0.19 it's possible to specify several actions for a tag if you need to do something different based on the path to the tag like this:
+
+	tagname => [
+		'tag/path' => action,
+		'/root/tag/path' => action,
+		'/root/*/path' => action,
+		qr{^root/ns:[^/]+/par$} => action,
+		default_action
+	],
+
+The path is matched against the list of parent tags joined by slashes.
+
 =head2 The Start Rules
 
 Apart from the normal rules that get invoked once the tag is fully parsed, including the contents and child tags, you may want to
@@ -279,8 +304,8 @@ sub new {
 		$i-=2;
 	}
 
-	$self->_split_rules( \@rules, 'rules');
-	$self->_split_rules( \@start_rules, 'start_rules');
+	$self->_split_rules( \@rules, 'rules', 'as is');
+	$self->_split_rules( \@start_rules, 'start_rules', 'handle');
 
 	$self->{for_parser} = {};
 	{ # extract the params for the XML::Parser::Expat constructor
@@ -312,11 +337,21 @@ sub new {
 }
 
 sub _split_rules {
-	my ($self, $rules, $type) = @_;
+	my ($self, $rules, $type, $default) = @_;
+
+	$self->{$type}{_default} = $default unless exists($self->{$type}{_default});
 
 	while (@$rules) {
 		my ($tag, $code) = (shift(@$rules), shift(@$rules));
-		if ($tag =~ m{^/(.*)/(\w*)$}) { # string with a '/regexp/'
+
+		if (ref($code) eq 'ARRAY') {
+			for( my $i = 0; $i < $#$code; $i+=2) {
+				$code->[$i] = _xpath2re($code->[$i]);
+			}
+			push @$code, $self->{$type}{_default} if @$code % 2 == 0; # add the default type if there's even number of items (path => code, path => code)
+		}
+
+		if ($tag =~ m{^/([^/].*)/([imosx]*)$}) { # string with a '/regexp/'
 			if ($2) {
 				push @{$self->{$type.'_re'}}, qr/(?$2)$1/;
 			} else {
@@ -340,6 +375,17 @@ sub _split_rules {
 	}
 }
 
+sub _xpath2re {
+	my $s = shift;
+	return $s if ref($s);
+	for ($s) {
+		s/([\.\[\]+{}\-])/\\$1/g;
+		s{\*}{.+}g;
+		s{^//}{}s;
+		s{^/}{^}s;
+	}
+	return qr{$s$};
+}
 
 sub _run {
 	my $self = shift;
@@ -534,14 +580,19 @@ sub _Start {
 		} # /of namespace handling
 
 
-		$self->_find_rule( 'start_rules', $Element, 'handle') if (! exists $self->{start_rules}{$Element});
-		$self->_find_rule( 'rules', $Element, 'as is') if (! exists $self->{rules}{$Element});
+		my ( $start_rule, $end_rule) = map {
+			if ($self->{$_}{$Element} and ref($self->{$_}{$Element}) ne 'ARRAY') {
+				$self->{$_}{$Element}
+			} else {
+				$self->_find_rule( $_, $Element, $self->{context})
+			}
+		} ( 'start_rules', 'rules');
 
-		if ($self->{start_rules}{$Element} ne 'handle'
+		if ($start_rule ne 'handle'
 		and (
-			!$self->{start_rules}{$Element}
-			or $self->{start_rules}{$Element} eq 'skip'
-			or !$self->{start_rules}{$Element}->($Element,\%Attr, $self->{context}, $self->{data}, $self)
+			!$start_rule
+			or $start_rule eq 'skip'
+			or !$start_rule->($Element,\%Attr, $self->{context}, $self->{data}, $self)
 			)
 		) {
 			# ignore the tag and the ones below
@@ -576,7 +627,7 @@ sub _Start {
 					}
 				}
 
-				$self->{in_interesting}++ if ref($self->{rules}{$Element}); # is this tag interesting?
+				$self->{in_interesting}++ if ref($end_rule) or $end_rule =~ /^=/s; # is this tag interesting?
 
 				if (! $self->{in_interesting}) { # it neither this tag not an acestor is interesting, just copy the tag
 					if (! $output_encoding) {
@@ -594,7 +645,7 @@ sub _Start {
 }
 
 sub _find_rule {
-	my ($self, $type, $Element, $default) = @_;
+	my ($self, $type, $Element, $path) = @_;
 
 	if (exists($self->{$type.'_re'})) {
 		for(my $i = 0; $i < @{$self->{$type.'_re'}}; $i++) {
@@ -605,7 +656,19 @@ sub _find_rule {
 		}
 	}
 	if (! exists $self->{$type}{$Element}) {
-		$self->{$type}{$Element} = (exists($self->{$type}{_default}) ? $self->{$type}{_default} : $default);
+		$self->{$type}{$Element} = $self->{$type}{_default};
+	}
+
+	if (ref $self->{$type}{$Element} eq 'ARRAY') {
+		$path = join( '/', @$path);
+		for(my $i=0; $i < $#{$self->{$type}{$Element}}; $i+=2) {
+			if ($path =~ $self->{$type}{$Element}[$i]) {
+				return $self->{$type}{$Element}[$i+1];
+			}
+		}
+		return $self->{$type}{$Element}[-1];
+	} else {
+		return $self->{$type}{$Element};
 	}
 }
 
@@ -651,12 +714,26 @@ sub _End {
 			}
 		}
 
-		my $rule = exists ($self->{rules}{$Element}) ? $self->{rules}{$Element} : $self->{rules}{_default};
+		my ($rule) = map {
+			if ($self->{$_}{$Element} and ref($self->{$_}{$Element}) ne 'ARRAY') {
+				$self->{$_}{$Element}
+			} else {
+				$self->_find_rule( $_, $Element, $self->{context})
+			}
+		} ('rules');
+
 		my $data = pop @{$self->{data}};
 
 		my @results;
-		if (ref $rule) {
-			@results = $rule->($Element, $data, $self->{context}, $self->{data}, $self);
+		if (ref $rule or $rule =~ /^=/s) {
+			if ($rule =~ /^==(.*)$/s) { # change the whole tag to a string
+				@results = ($1);
+			} elsif ($rule =~ /^=(.*)$/s) { # change the contents to a string
+				@results = ($Element => $1);
+			} else {
+				@results = $rule->($Element, $data, $self->{context}, $self->{data}, $self);
+			}
+
 			if ($self->{style} eq 'filter') {
 
 				$self->{in_interesting}--;
@@ -701,8 +778,10 @@ sub _End {
 			print {$self->{FH}} "$data->{_content}</$Element>";
 
 		} else { # a predefined rule
-			if ($rule =~ s/ no xmlns$//) {
+
+			if ($rule =~ s/(?:^| )no xmlns$//) {
 				$Element =~ s/^\w+://;
+				$rule = 'as_is' if $rule eq '';
 			}
 
 			if ($rule eq '') {
@@ -742,6 +821,9 @@ sub _End {
 
 			} elsif ($rule eq 'raw extended') {
 				@results = (':'.$Element => $data, [$Element => $data]);
+
+			} elsif ($rule eq 'raw extended array') {
+				@results = ('@:'.$Element => $data, [$Element => $data]);
 
 			} else {
 				croak "Unknown predefined rule '$rule'!";
@@ -964,6 +1046,22 @@ sub toXML {
 
 	$attrs = undef if (ref $attrs eq 'HASH' and ! %{$attrs}); # ->toXML( $tagname, {}, ...)
 
+	if ($tag eq '') {
+		if (! ref($attrs)) { # ->toXML( '', $string_content, ...)
+			return $self->escape_value($attrs);
+		} elsif (ref($attrs) eq 'ARRAY') {
+			return join( '', map {
+				if (!ref($_)) {
+					$self->escape_value($_)
+				} elsif (ref($_) eq 'ARRAY' and @$_ == 2) {
+					$self->toXML($_->[0], $_->[1])
+				} else {
+					croak "The content in XML::Rules->ToXML( '', here) must be a string or an arrayref containing strings and two element arrayrefs!";
+				}
+			} @$attrs);
+		}
+	}
+
 	if (! ref($attrs)) { # ->toXML( $tagname, $string_content, ...)
 		if ($no_close) {
 			return "<$tag>" . $self->escape_value($attrs);
@@ -975,6 +1073,7 @@ sub toXML {
 	} elsif (ref($attrs) eq 'ARRAY') {
 		return join( $prefix, map $self->toXML($tag, $_, 0, $ident, $base), @$attrs);
 	}
+
 
 	my $content = $attrs->{_content};
 	my $result = "<$tag";
@@ -1100,6 +1199,63 @@ for the constructor instead.
 	$xml = $parser->closeParentsToXML( [$level])
 
 Prints the closing tags for all or the topmost $level ancestor tags of the one currently processed.
+
+=head2 paths2rules
+
+	my $parser = XML::Rules->new(
+		rules => paths2rules {
+			'/root/subtag/tag' => sub { ...},
+			'/root/othertag/tag' => sub {...},
+			'tag' => sub{ ... the default code for this tag ...},
+			...
+		}
+	);
+
+This helper function converts a hash of "somewhat xpath-like" paths and subs/rules into the format required by the module.
+Due to backwards compatibility and efficiency I can't directly support paths in the rules and the direct syntax for their
+specification is a bit awkward. So if you need the paths and not the regexps, you may use this helper instead of:
+
+	my $parser = XML::Rules->new(
+		rules => {
+			'tag' => [
+				'/root/subtag' => sub { ...},
+				'/root/othertag' => sub {...},
+				sub{ ... the default code for this tag ...},
+			],
+			...
+		}
+	);
+
+=cut
+
+sub paths2rules {
+	my ($paths) = @_;
+
+	my %rules;
+	while ( my ($tag, $val) = each %$paths) {
+
+		if ($tag =~ m{^(.*)/(.*)$}) {
+			my ($path, $tagname) = ($1, $2);
+
+			if (exists $rules{$tagname} and ref($rules{$tagname}) eq 'ARRAY') {
+				if (@{$rules{$tagname}} % 2) {
+					push @{$rules{$tagname}}, $path, $val;
+				} else {
+					splice @{$rules{$tagname}}, -1, 0, $path, $val;
+				}
+			} else {
+				$rules{$tagname} = [ $path => $val]
+			}
+
+		} elsif (exists $rules{$tag} and ref($rules{$tag}) eq 'ARRAY') {
+			push @{$rules{$tag}}, $val;
+		} else {
+			$rules{$tag} = $val
+		}
+	}
+
+	return \%rules;
+}
 
 =head1 Properties
 
