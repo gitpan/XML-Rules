@@ -17,11 +17,11 @@ XML::Rules - parse XML & process tags by rules starting from leaves
 
 =head1 VERSION
 
-Version 0.20
+Version 1.00
 
 =cut
 
-our $VERSION = '0.20';
+our $VERSION = '1.00';
 
 =head1 SYNOPSIS
 
@@ -85,12 +85,83 @@ our $VERSION = '0.20';
 	$parser = XML::Rules->new(rules => \@rules);
 	$parser->parse( $xml);
 
+=head1 INTRODUCTION
+
+There are several ways to extract data from XML. One that's often used is to read the whole file and transform it into a huge maze of objects and then write code like
+
+	foreach my $obj ($XML->forTheLifeOfMyMotherGiveMeTheFirstChildNamed("Peter")->pleaseBeSoKindAndGiveMeAllChildrenNamedSomethingLike("Jane")) {
+		my $obj2 = $obj->sorryToKeepBotheringButINeedTheChildNamed("Theophile");
+		my $birth = $obj2->whatsTheValueOfAttribute("BirthDate");
+		print "Theophile was bort at $birth\n";
+	}
+
+I'm exagerating of course, but you probably know what I mean. You can of course shorten the path and call just one method ... that is if you spend the time to learn one more "cool" thing starting with X. XPath.
+
+You can also use XML::Simple and generate an almost equaly huge maze of hashes and arrays ... which may make the code more or less complex. In either case you need to have enough memory
+to store all that data, even if you only need a piece here and there.
+
+Another way to parse the XML is to create some subroutines that handle the start and end tags and the text and whatever else may appear in the XML. Some modules will let you specify just one for start tag, one for text and one for end tag, others will let you install different handlers for different tags. The catch is that you have to build your data structures yourself, you have to know where you are, what tag is just open and what is the parent and it's parent etc. so that you could add the attributes and especially the text to the right place. And the handlers have to do everything as their side effect. Does anyone remember what do they say about side efects? They make the code hard to debug, they tend to change the code into a maze of interdependent snippets of code.
+
+So what's the difference in the way XML::Rules works? At the first glance, not much. You can also specify subroutines to be called for the tags encountered while parsing the XML, just like the other even based XML parsers. The difference is that you do not have to rely on sideeffects if all you want is to store the value of a tag. You simply return whatever you need from the current tag and the module will add it at the right place in the data structure it builds and will provide it to the handlers for the parent tag. And if the parent tag does return that data again it will be passed to its parent and so forth. Until we get to the level at which it's convenient to handle all the data we accumulated from the twig.
+
+Do we want to keep just the content and access it in the parent tag handler under a specific name?
+
+	foo => sub {return 'foo' => $_[1]->{_content}}
+
+Do we want to ornament the content a bit and add it to the parent tag's content?
+
+	u => sub {return '_' . $_[1]->{_content} . '_'}
+	strong =>  sub {return '*' . $_[1]->{_content} . '*'}
+	uc =>  sub {return uc($_[1]->{_content})}
+
+Do we want to merge the attributes into a string and access the string from the parent tag under a specified name?
+
+	address => sub {return 'Address' => "Street: $_[1]->{street} $_[1]->{bldngNo}\nCity: $_[1]->{city}\nCountry: $_[1]->{country}\nPostal code: $_[1]->{zip}"}
+
+and in this case the $_[1]->{street} may either be an attribute of the <address> tag or it may be ther result of the handler (rule)
+
+	street => sub {return 'street' => $_[1]->{_content}}
+
+and thus come from a child tag <street>. You may also use the rules to convert codes to values
+
+	our %states = (
+	  AL => 'Alabama',
+	  AK => 'Alaska',
+	  ...
+	);
+	...
+	state => sub {return 'state' => $states{$_[1]->{_content}}; }
+
+ or
+
+	address => sub {
+		if (exists $_[1]->{id}) {
+			$sthFetchAddress->execute($_[1]->{id});
+			my $addr = $sthFetchAddress->fetchrow_hashref();
+			$sthFetchAddress->finish();
+			return 'address' => $addr;
+		} else {
+			return 'address' => $_[1];
+		}
+	}
+
+so that you do not have to care whether there was
+
+	<address id="147"/>
+
+or
+
+	<address><street>Larry Wall's St.</street><streetno>478</streetno><city>Core</city><country>The Programming Republic of Perl</country></address>
+
+At each level in the tree structure serialized as XML you can decide what to keep, what to throw away, what to transform and then just return the stuff you care about and it will be available to the handler at the next level.
 
 =head1 CONSTRUCTOR
 
 	my $parser = XML::Rules->new(
 		rules => \@rules,
 		[ start_rules => \@start_rules, ]
+		[ stripspaces => 0 / 1 / 2 / 3   +   0 / 4   +   0 / 8, ]
+		[ normalisespaces => 0 / 1, ]
 		[ style => 'parser' / 'filter', ]
 		[ ident => '  ', [reformat_all => 0 / 1] ],
 		[ encode => 'encoding specification', ]
@@ -100,6 +171,8 @@ our $VERSION = '0.20';
 	);
 
 Options passed to XML::Parser::Expat : ProtocolEncoding Namespaces NoExpand Stream_Delimiter ErrorContext ParseParamEnt Base
+
+The "stripspaces" controls the handling of whitespace. Please see the C<Whitespace handling> bellow.
 
 The "style" specifies whether you want to build a parser used to extract stuff from the XML or filter/modify the XML. If you specify
 style => 'filter' then all tags for which you do not specify a subroutine rule or that occure inside such a tag are copied to the output filehandle
@@ -136,13 +209,14 @@ where the tagspecification may be either a name of a tag, a string containing co
 or a string containing a regexp enclosed in // with optional parameters or a qr// compiled regular expressions. The tag names and tag name lists
 take precedence to the regexps, the regexps are (in case of arrayref only!!!) tested in the order in which they are specified.
 
-These rules are evaluated/executed whenever a tag if fully parsedin including all the content and child tags and they may access the content and attributes of the
+These rules are evaluated/executed whenever a tag if fully parsed including all the content and child tags and they may access the content and attributes of the
 specified tag plus the stuff produced by the rules evaluated for the child tags.
 
 The action may be either
 
 	an undef or empty string = ignore the tag and all its children
 	a subroutine reference = the subroutine will be called to handle the tag data&contents
+		sub { my ($tagname, $attrHash, $contexArray, $parentDataArray, $parser) = @_; ...}
 	'content' = only the content of the tag is preserved and added to
 		the parent tag's hash as an attribute named after the tag
 		sub { $_[0] => $_[1]->{_content}}
@@ -179,15 +253,19 @@ The action may be either
 		sub { delete $_[1]->{_content}; %{$_[0]}}
 	'pass without content' = same as 'pass no content'
 	'raw' = the [tagname => attrs] is pushed to the parent tag's _content.
-		You would use this styleif you wanted to be able to print
+		You would use this style if you wanted to be able to print
 		the parent tag as XML preserving the whitespace or other textual content
 		sub { [$_[0] => $_[1]]}
 	'raw extended' = the [tagname => attrs] is pushed to the parent tag's _content
 		and the attrs are added to the parent's attribute hash with ":$tagname" as the key
-		sub { (':'.$Element => $data, [$Element => $data])};
+		sub { (':'.$_[0] => $_[1], [$_[0] => $_[1]])};
 	'raw extended array' = the [tagname => attrs] is pushed to the parent tag's _content
 		and the attrs are pushed to the parent's attribute hash with ":$tagname" as the key
-		sub { ('@:'.$Element => $data, [$Element => $data])};
+		sub { ('@:'.$_[0] => $_[1], [$_[0] => $_[1]])};
+	'by <attrname>' = uses the value of the specified attribute as the key when adding the
+		attribute hash into the parent tag's hash. You can specify more names, in that case
+		the first found is used.
+		sub {delete($_[1]->{name}) => $_[1]}
 	'==...' = replace the tag by the specified string. That is the string will be added to
 		the parent tag's _content
 		sub { return '...' }
@@ -195,13 +273,14 @@ The action may be either
 		sub { return $_[0] => '...' }
 
 You may also add " no xmlns" at the end of all those predefined rules to strip the namespace
-alias from the $Element.
+alias from the $_[0] (tag name).
 
 The subroutines in the rules specification receive five parameters:
 
 	$rule->( $tag_name, \%attrs, \@context, \@parent_data, $parser)
 
-It's OK to destroy the first two parameters, but you should treat the other three as read only!
+It's OK to destroy the first two parameters, but you should treat the other three as read only
+or at least treat them with care!
 
 	$tag_name = string containing the tag name
 	\%attrs = hash containing the attributes of the tag plus the _content key
@@ -264,7 +343,6 @@ Apart from the normal rules that get invoked once the tag is fully parsed, inclu
 attach some code to the start tag to (optionaly) skip whole branches of XML or set up attributes and variables. You may set up
 the start rules either in a separate parameter to the constructor or in the rules=> by prepending the tag name(s) by ^.
 
-
 These rules are in form
 
 	tagspecification => undef / '' / 'skip'	--> skip the element, including child tags
@@ -272,12 +350,43 @@ These rules are in form
 		if you specify the _default rule.
 	tagspecification => \&subroutine
 
-The subroutines receive the same parameters as for the (end tag) rules, but their return value is treated differently.
+The subroutines receive the same parameters as for the "end tag" rules except of course the _content, but their return value is treated differently.
 If the subroutine returns a false value then the whole branch enclosed by the current tag is skipped, no data are stored and no rules are
 executed. You may modify the hash referenced by $attr.
 
 Both types of rules are free to store any data they want in $parser->{pad}. This property is NOT emptied
 after the parsing!
+
+=head2 Whitespace handling
+
+There are two options that affect the whitespace handling: stripspaces and normalisespaces. The normalisespaces is a simple flag that controls
+whether multiple spaces/tabs/newlines are collapsed into a single space or not. The stripspaces is more complex, it's a bit-mask,
+an ORed combination of the following options:
+
+	0 - don't remove whitespace around tags
+	    (around tags means before the opening tag and after the closing tag, not in the tag's content!)
+	1 - remove whitespace before tags whose rules did not return any text content
+	    (the rule specified for the tag caused the data of the tag to be ignored,
+		processed them already or added them as attributes to parent's \%attr)
+	2 - remove whitespace around tags whose rules did not return any text content
+	3 - remove whitespace around all tags
+
+	0 - remove only whitespace-only content
+	    (that is remove the whitespace around <foo/> in this case "<bar>   <foo/>   </bar>"
+		but not this one "<bar>blah   <foo/>  blah</bar>")
+	4 - remove trailing/leading whitespace
+	    (remove the whitespace in both cases above)
+
+	0 - don't trim content
+	8 - do trim content
+		(That is for "<foo>  blah   </foo>" only pass to the rule {_content => 'blah'})
+
+
+That is if you have a data oriented XML in which each tag contains either text content or subtags, but not both,
+you want to use stripspaces => 3 or stripspaces => 3|4. This will not only make sure you don't need to bother
+with the whitespace-only _content of the tags with subtags, but will also make sure you do not keep on wasting
+memory while parsing a huge XML and processing the "twigs". Without that option the parent tag of
+the repeated tag would keep on accumulating unneeded whitespace in its _content.
 
 =cut
 
@@ -329,6 +438,14 @@ sub new {
 
 	delete $self->{opt}{encode} if $self->{opt}{encode} =~ /^utf-?8$/i;
 	delete $self->{opt}{output_encoding} if $self->{opt}{output_encoding} =~ /^utf-?8$/i;
+
+	for (qw(normalisespace normalizespace normalizespaces)) {
+		last if defined($self->{opt}{normalisespaces});
+		$self->{opt}{normalisespaces} = $self->{opt}{$_};
+		delete $self->{opt}{$_};
+	}
+	$self->{opt}{normalisespaces} = 0 unless(defined($self->{opt}{normalisespaces}));
+	$self->{opt}{stripspaces} = 0 unless(defined($self->{opt}{stripspaces}));
 
 	require 'Encode.pm' if $self->{opt}{encode};
 	require 'Encode.pm' if $self->{opt}{output_encoding};
@@ -387,6 +504,14 @@ sub _xpath2re {
 	return qr{$s$};
 }
 
+sub skip_rest {
+	die "[XML::Rules] skip rest\n";
+}
+
+sub return_nothing {
+	die "[XML::Rules] return nothing\n";
+}
+
 sub _run {
 	my $self = shift;
 	my $string = shift;
@@ -403,17 +528,41 @@ sub _run {
 
 	$self->{data} = [];
 	$self->{context} = [];
+	$self->{_ltrim} = [0];
 
 	if (! eval {
 		$self->{parser}->parse($string) and 1;
 	}) {
 		my $err = $@;
-		$err =~ s/at \S+Rules.pm line \d+$//;
-		croak $err;
+		undef $@;
+
+		if ($err =~ /^\[XML::Rules\] skip rest/) {
+			my (undef, $handler) = $self->{parser}->setHandlers(End => undef);
+			foreach my $tag (reverse @{$self->{context} = []}) {
+				$handler->( $self->{parser}, $tag);
+			}
+		} else {
+
+			delete $self->{normal_handlers};
+			delete $self->{ignore_handlers};
+			delete $self->{parameters};
+			$self->{parser}->release();
+
+			$self->{data} = [];
+			$self->{context} = [];
+
+			if ($err =~ /^\[XML::Rules\] return nothing/) {
+				return;
+			}
+
+			$err =~ s/at \S+Rules\.pm line \d+$//
+				and croak $err or die $err;
+		}
 	};
 
 	delete $self->{normal_handlers};
 	delete $self->{ignore_handlers};
+	$self->{parser}->release();
 
 	delete $self->{parameters};
 	my $data; # return the accumulated data, without keeping a copy inside the object
@@ -438,13 +587,13 @@ sub parsestring;
 *parsestring = \&parse;
 sub parse {
 	my $self = shift;
-	croak("This XML::Rules object may only be used in as a parser!") if ($self->{style} eq 'filter');
+	croak("This XML::Rules object may only be used as a filter!") if ($self->{style} eq 'filter');
 	$self->_run(@_);
 }
 
 sub parsefile {
 	my $self = shift;
-	croak("This XML::Rules object may only be used in as a parser!") if ($self->{style} eq 'filter');
+	croak("This XML::Rules object may only be used as a filter!") if ($self->{style} eq 'filter');
 	my $filename = shift;
 	open my $IN, '<', $filename or croak "Cannot open '$filename' for reading: $^E";
 	return $self->_run($IN, @_);
@@ -455,7 +604,7 @@ sub filterstring;
 *filterstring = \&filter;
 sub filter {
 	my $self = shift;
-	croak("This XML::Rules object may only be used in as a filter!") unless ($self->{style} eq 'filter');
+	croak("This XML::Rules object may only be used as a parser!") unless ($self->{style} eq 'filter');
 
 	my $XML = shift;
 	$self->{FH} = shift || select(); # either passed or the selected filehandle
@@ -478,7 +627,7 @@ sub filter {
 
 sub filterfile {
 	my $self = shift;
-	croak("This XML::Rules object may only be used in as a filter!") unless ($self->{style} eq 'filter');
+	croak("This XML::Rules object may only be used as a parser!") unless ($self->{style} eq 'filter');
 
 	my $filename = shift;
 	open my $IN, '<', $filename or croak "Cannot open '$filename' for reading: $^E";
@@ -508,12 +657,71 @@ sub _XMLDecl {
 	}
 }
 
+=begin comment
+
+start tag
+	& 3 = 3 -> rtrim parent's _content
+	& 8 = 8 -> $ltrim = 1
+
+string content
+	$ltrim -> ltrim the string, if not completely whitespace set $ltrim  0
+
+end tag
+	& 8 = 8 -> rtrim own content
+	& 3 = 3 -> $ltrim = 1
+	empty_returned_content and & 3 in (1,2) -> rtrim parent content
+	empty_returned_content and & 3  = 2 -> $ltrim
+
+=end comment
+
+=cut
+
+sub _rtrim {
+	my ($self, $attr, $more) = @_;
+
+	if ($more) {
+		if (ref $attr->{_content}) {
+			if (!ref($attr->{_content}[-1])) {
+				$attr->{_content}[-1] =~ s/\s+$//s;
+				pop @{$attr->{_content}} if $attr->{_content}[-1] eq '';
+				delete $attr->{_content} unless @{$attr->{_content}};
+			}
+		} else {
+			$attr->{_content} =~ s/\s+$//s;
+			delete $attr->{_content} if $attr->{_content} eq '';
+		}
+	} else {
+		if (ref $attr->{_content}) {
+			if (!ref($attr->{_content}[-1]) and $attr->{_content}[-1] =~ /^\s*$/s) {
+				pop @{$attr->{_content}} ;
+				delete $attr->{_content} unless @{$attr->{_content}};
+			}
+		} else {
+			delete $attr->{_content} if $attr->{_content}  =~ /^\s*$/s;
+		}
+	}
+}
+
 sub _Start {
 	my $self = shift;
 	my $encode = $self->{opt}{encode};
 	my $output_encoding = $self->{opt}{output_encoding};
 	return sub {
 		my ( $Parser, $Element , %Attr) = @_;
+
+		if (($self->{opt}{stripspaces} & 3) == 3) {
+			#rtrim parent
+#print "rtrim parent content in _Start\n";
+			if ($self->{data}[-1] and $self->{data}[-1]{_content}) {
+				$self->_rtrim( $self->{data}[-1], ($self->{opt}{stripspaces} & 4));
+			}
+		}
+		if ($self->{opt}{stripspaces} & 8) {
+#print "ltrim own content in _Start\n";
+			push @{$self->{_ltrim}}, 2;
+		} else {
+			push @{$self->{_ltrim}}, 0;
+		}
 
 		if ($self->{namespaces}) {
 			my %restore;
@@ -618,6 +826,7 @@ sub _Start {
 
 			push @{$self->{context}}, $Element;
 			push @{$self->{data}}, \%Attr;
+			$self->{lastempty} = 0;
 
 			if ($self->{style} eq 'filter') {
 				if (! $self->{in_interesting}) { # if neither of the ancestors was interesting (had a specific rule) print its content so far
@@ -682,14 +891,33 @@ sub _Char {
 			$String = Encode::encode( $encode, $String);
 		}
 
+		if ($self->{_ltrim}[-1]) {
+#print "ltrim in $self->{context}[-1] ($String)\n";
+			if ($self->{_ltrim}[-1] == 2) {
+				$String =~ s/^\s+//s;
+				return if $String eq '';
+			} else {
+				return if $String =~ /^\s*$/s;
+			}
+			$self->{_ltrim}[-1] = 0;
+#print "  ($String)\n";
+		}
+		$String =~ s/\s+/ /gs if ($self->{opt}{normalisespaces});
+
 		if (!exists $self->{data}[-1]{_content}) {
 			$self->{data}[-1]{_content} = $String;
 		} elsif (!ref $self->{data}[-1]{_content}) {
+			if ($self->{opt}{normalisespaces} and $self->{data}[-1]{_content} =~ /\s$/ and $String =~ /^\s/) {
+				$String =~ s/^\s+//s;
+			}
 			$self->{data}[-1]{_content} .= $String;
 		} else {
 			if (ref $self->{data}[-1]{_content}[-1]) {
 				push @{$self->{data}[-1]{_content}}, $String;
 			} else {
+				if ($self->{opt}{normalisespaces} and $self->{data}[-1]{_content}[-1] =~ /\s$/ and $String =~ /^\s/) {
+					$String =~ s/^\s+//s;
+				}
 				$self->{data}[-1]{_content}[-1] .= $String;
 			}
 		}
@@ -701,6 +929,14 @@ sub _End {
 	return sub {
 		my ( $Parser, $Element) = @_;
 		$Element = pop @{$self->{context}}; # the element name may have been mangled by XMLNS aliasing
+
+		if ($self->{opt}{stripspaces} & 8) {
+#print "rtrim own content\n";
+			if ($self->{data}[-1] and $self->{data}[-1]{_content}) {
+				$self->_rtrim( $self->{data}[-1], 1);
+			}
+		}
+		pop(@{$self->{_ltrim}});
 
 		if ($self->{namespaces}) {
 			if (my $restore = pop @{$self->{xmlns_restore}}) { # restore the old default namespace and/or alias mapping
@@ -825,14 +1061,48 @@ sub _End {
 			} elsif ($rule eq 'raw extended array') {
 				@results = ('@:'.$Element => $data, [$Element => $data]);
 
+			} elsif ($rule =~ /^by\s+(\S+)$/) {
+				my $attr = $1;
+				if ($attr =~ /,/) {
+					my @attr = split /,/, $attr;
+					foreach (@attr) {
+						next unless exists ($data->{$_});
+						@results = (delete $data->{$_} => $data);
+						last;
+					}
+				} else {
+					@results = (delete $data->{$attr} => $data);
+				}
+
 			} else {
 				croak "Unknown predefined rule '$rule'!";
 			}
 		}
 
+		if (! @results or (@results % 2 == 0) or $results[-1] eq '') {
+			if ($self->{opt}{stripspaces} & 3 and @{$self->{data}} and $self->{data}[-1]{_content}) { # stripping some spaces, it's not root and it did not return content
+#print "maybe stripping some spaces in $Element, it's not root and it did not return content\n";
+				if (($self->{opt}{stripspaces} & 3) < 3 and $self->{data}[-1]{_content}) {
+					# rtrim parent content
+#print "  yes, rtrim parent '$self->{data}[-1]{_content}'\n";
+					$self->_rtrim( $self->{data}[-1], ($self->{opt}{stripspaces} & 4));
+#print "  result '$self->{data}[-1]{_content}'\n";
+				}
+
+				$self->{_ltrim}[-1] = (($self->{opt}{stripspaces} & 4) ? 2 : 1)
+					if ($self->{opt}{stripspaces} & 3) == 2;
+			}
+		} else {
+			$self->{_ltrim}[-1] = 0;
+		}
+		if (($self->{opt}{stripspaces} & 3) == 3) {
+			$self->{_ltrim}[-1] = (($self->{opt}{stripspaces} & 4) ? 2 : 1);
+		}
+
+
 		return unless scalar(@results) or scalar(@results) == 1 and ($results[0] eq '' or !defined($results[0]));
 
-		@{$self->{data}} = ({}) unless @{$self->{data}}; # oops we are already closing the root tag!
+		@{$self->{data}} = ({}) unless @{$self->{data}}; # oops we are already closing the root tag! We do need there to be at least one hashref in $self->{data}
 
 		if (scalar(@results) % 2) {
 			# odd number of items, last is content
@@ -1257,6 +1527,22 @@ sub paths2rules {
 	return \%rules;
 }
 
+=head2 return_nothing
+
+Stop parsing the XML, forget any data we already have and return from the $parser->parse().
+This is only supposed to be used within rules and may be called both as a method and as
+an ordinary function (it's not exported).
+
+=head2 skip_rest
+
+Stop parsing the XML and return whatever data we already have from the $parser->parse().
+The rules for the currently opened tags are evaluated as if the XML contained all
+the closing tags in the right order.
+
+These two work via raising an exception, the exception is caught within the $parser->parse() and do not propagate outside.
+It's also safe to raise any other exception within the rules, the exception will be caught as well, the internal state of the $parser object
+is cleaned and the exception is rethrown.
+
 =head1 Properties
 
 =head2 parameters
@@ -1403,7 +1689,7 @@ The escape_value() method is taken with minor changes from XML::Simple.
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2006 Jan Krynicky, all rights reserved.
+Copyright 2006-2007 Jan Krynicky, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.

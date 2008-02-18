@@ -10,6 +10,10 @@ t/01-simple_xml.t
 t/02-encoding.t
 t/03-output.t
 t/04-filter.t
+t/05-namespaces.t
+t/06-whitespace.t
+t/07-content_whitespace.t
+t/08-whitespace_more.t
 t/boilerplate.t
 t/pod-coverage.t
 t/pod.t
