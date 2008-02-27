@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name: XML-Rules
-version: 1.00
+version: 1.01
 author:
   - Jan Krynicky <Jenda@CPAN.org>
 abstract: |-
@@ -11,14 +11,14 @@ resources:
 requires:
   XML::Parser: 2.00
   XML::Parser::Expat: 2.00
-  perl: 5.8
+  perl: 5.008
 build_requires:
   Test::More: 0
 dynamic_config: 0
 provides:
   XML::Rules:
     file: lib/XML/Rules.pm
-    version: 1.00
+    version: 1.01
 generated_by: Module::Build version 0.2805
 meta-spec:
   url: |-
