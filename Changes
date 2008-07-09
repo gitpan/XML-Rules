@@ -42,3 +42,15 @@ Revision history for XML-Rules
 
 0.22	2007-12-25
 		Added whitespace handling
+
+1.00	2008-02-18
+		Reworked the whitespace handling
+		Added 'by <attrname' builtin rule
+		Fixed filter used as parser and parser used as filter error messages
+		Added return_nothing() and skip_rest() methods to allow you to stop parsing the XML
+
+1.03	2008-07-09
+		Fixed escaping in filter mode
+		Added '%key' style returns
+		Added 'content by <attrname>' and 'no content by <attrname' builtin rules
+		Added inferRulesFromDTD and inferRulesFromExample

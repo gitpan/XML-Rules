@@ -15,7 +15,7 @@ my $xml = <<'*END*';
   <email>JLuser@bogus.com</email>
   <address>
    <street>Washington st.</street>
-   <city>Old Creek</city>
+   <city>Old Creek &amp; Pond</city>
    <country>The US</country>
    <bogus>bleargh</bogus>
   </address>
@@ -26,7 +26,7 @@ my $xml = <<'*END*';
   </phones>
  </person>
  <person>
-  <fname>John</fname>
+  <fname>John&amp;Mary</fname>
   <lname>Other</lname>
   <email>JOther@silly.com</email>
   <address>
@@ -189,7 +189,7 @@ my $xml = <<'*END*';
   <email>JLuser@bogus.com</email>
   <address>
    <street>Washington st.</street>
-   <city>Old Creek</city>
+   <city>Old Creek &amp; Pond</city>
    <country>The US</country>
    <bogus>bleargh</bogus>
   </address>
@@ -200,7 +200,7 @@ my $xml = <<'*END*';
   </phones>
  </person>
  <person>
-  <fname>John</fname>
+  <fname>John&amp;Mary</fname>
   <lname>Other</lname>
   <email>JOther@silly.com</email>
   <address>
@@ -246,7 +246,7 @@ my $xml = <<'*END*';
   <email>JLuser@bogus.com</email>
   <address>
    <street>Washington st.</street>
-   <city>Old Creek</city>
+   <city>Old Creek &amp; Pond</city>
    <country>The US</country>
    <bogus>bleargh</bogus>
   </address>
@@ -257,7 +257,7 @@ my $xml = <<'*END*';
   </phones>
  </person>
  <person>
-  <fname>John</fname>
+  <fname>John&amp;Mary</fname>
   <lname>Other</lname>
   <email>JOther@silly.com</email>
   <address>

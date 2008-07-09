@@ -13,15 +13,15 @@ use XML::Parser::Expat;
 
 =head1 NAME
 
-XML::Rules - parse XML & process tags by rules starting from leaves
+XML::Rules - parse XML and specify what and how to keep/process for individual tags
 
 =head1 VERSION
 
-Version 1.01
+Version 1.03
 
 =cut
 
-our $VERSION = '1.01';
+our $VERSION = '1.03';
 
 =head1 SYNOPSIS
 
@@ -182,6 +182,9 @@ The "ident" specifies what character(s) to use to ident the tags when filtering,
 "reformat_all" is not set then this affects only the tags that have a rule and their subtags. And in case of subtags only those that were
 added into the attribute hash by their rules, not those left in the _content array!
 
+The "warnoverwrite" instructs XML::Rules to issue a warning whenever the rule cause a key in a tag's hash to be overwritten by new
+data produced by the rule of a subtag. This happens eg. if a tag is repeated and its rule doesn't expect it.
+
 The "encode" allows you to ask the module to run all data through Encode::encode( 'encoding_specification', ...)
 before being passed to the rules. Otherwise all data comes as UTF8.
 
@@ -266,6 +269,14 @@ The action may be either
 		attribute hash into the parent tag's hash. You can specify more names, in that case
 		the first found is used.
 		sub {delete($_[1]->{name}) => $_[1]}
+	'content by <attrname>' = uses the value of the specified attribute as the key when adding the
+		tags content into the parent tag's hash. You can specify more names, in that case
+		the first found is used.
+		sub {$_[1]->{name} => $_[1]->{_content}}
+	'no content by <attrname>' = uses the value of the specified attribute as the key when adding the
+		attribute hash into the parent tag's hash. The content is dropped. You can specify more names,
+		in that case the first found is used.
+		sub {delete($_[1]->{_content}); delete($_[1]->{name}) => $_[1]}
 	'==...' = replace the tag by the specified string. That is the string will be added to
 		the parent tag's _content
 		sub { return '...' }
@@ -313,14 +324,33 @@ If the parent's _content is an array, then the string is push()ed to the array.
 
 4) an even numbered list - it's a list of key & value pairs to be added to the parent's hash.
 
-The handling of the attributes may be changed by adding '@', '+', '*' or '.' before the attribute name.
+The handling of the attributes may be changed by adding '@', '%', '+', '*' or '.' before the attribute name.
 
 Without any "sigil" the key & value is added to the hash overwriting any previous values.
+
 The values for the keys starting with '@' are push()ed to the arrays referenced by the key name
 without the @. If there already is an attribute of the same name then the value will be preserved and will become
 the first element in the array.
+
+The values for the keys starting with '%' have to be either hash or array references. The key&value pairs
+in the referenced hash or array will be added to the hash referenced by the key. This is nice for rows of tags like this:
+
+  <field name="foo" value="12"/>
+  <field name="bar" value="24"/>
+
+if you specify the rule as
+
+  field => sub { '%fields' => [$_[1]->{name} => $_[1]->{value}]}
+
+then the parent tag's has will contain
+
+  fields => {
+    foo => 12,
+	bar => 24,
+  }
+
 The values for the keys starting with '+' are added to the current value, the ones starting with '.' are
-appended to the current value and the ones starting with '*' are multiplied by the current value.
+appended to the current value and the ones starting with '*' multiply the current value.
 
 5) an odd numbered list - the last element is appended or push()ed to the parent's _content, the rest is handled as in the previous case.
 
@@ -608,9 +638,15 @@ sub filter {
 
 	my $XML = shift;
 	$self->{FH} = shift || select(); # either passed or the selected filehandle
-	if (!ref($self->{FH})) { # yeah, select sometimes returns the name of the filehandle, not the filehandle itself. eg. "main::STDOUT"
-		no strict;
-		$self->{FH} = \*{$self->{FH}};
+	if (!ref($self->{FH})) {
+		if ($self->{FH} =~ /^main::(?:STDOUT|STDERR)$/) {
+			# yeah, select sometimes returns the name of the filehandle, not the filehandle itself. eg. "main::STDOUT"
+			no strict;
+			$self->{FH} = \*{$self->{FH}};
+		} else {
+			open my $FH, '>', $self->{FH} or croak(qq{Failed to open "$self->{FH}" for writing: $^E});
+			$self->{FH} = $FH;
+		}
 	} elsif (ref($self->{FH}) eq 'SCALAR') {
 		open my $FH, '>', $self->{FH};
 		$self->{FH} = $FH;
@@ -634,8 +670,14 @@ sub filterfile {
 
 	$self->{FH} = shift || select(); # either passed or the selected filehandle
 	if (!ref($self->{FH})) {
-		no strict;
-		$self->{FH} = \*{$self->{FH}};
+		if ($self->{FH} =~ /^main::(?:STDOUT|STDERR)$/) {
+			# yeah, select sometimes returns the name of the filehandle, not the filehandle itself. eg. "main::STDOUT"
+			no strict;
+			$self->{FH} = \*{$self->{FH}};
+		} else {
+			open my $FH, '>', $self->{FH} or croak(qq{Failed to open "$self->{FH}" for writing: $^E});
+			$self->{FH} = $FH;
+		}
 	} elsif (ref($self->{FH}) eq 'SCALAR') {
 		open $self->{FH}, '>', $self->{FH};
 	}
@@ -729,7 +771,7 @@ sub _Start {
 #print "Found a xmlns attribute in $Element!\n";
 				$restore{''} = $self->{xmlns_map}{''};
 				if (!exists($self->{namespaces}{ $Attr{xmlns} })) {
-					warn qq{Unexpected namespace "$Attr{xmlns}" found in the XML!\n};
+					warn qq{Unexpected namespace "$Attr{xmlns}" found in the XML!\n} unless exists $self->{namespaces}{'*'};
 					delete $self->{xmlns_map}{''};
 					delete $restore{''} unless defined($restore{''});
 					delete($Attr{xmlns});
@@ -741,7 +783,7 @@ sub _Start {
 				next unless $attr =~ /^xmlns:(.*)$/;
 				$restore{$1} = $self->{xmlns_map}{$1};
 				if (!exists($self->{namespaces}{ $Attr{$attr} })) {
-					warn qq{Unexpected namespace "$Attr{$attr}" found in the XML!\n};
+					warn qq{Unexpected namespace "$Attr{$attr}" found in the XML!\n} unless exists $self->{namespaces}{'*'};
 					delete $self->{xmlns_map}{$1};
 					delete $restore{$1} unless defined($restore{$1});
 					delete($Attr{$attr});
@@ -975,7 +1017,7 @@ sub _End {
 				$self->{in_interesting}--;
 				if (!$self->{in_interesting}) {
 					if (@{$self->{data}}) {
-						print {$self->{FH}} $self->{data}[-1]{_content};
+						print {$self->{FH}} $self->escape_value($self->{data}[-1]{_content});
 						delete $self->{data}[-1]{_content};
 					}
 					my $base;
@@ -1011,7 +1053,7 @@ sub _End {
 				}
 			}
 		} elsif ($self->{style} eq 'filter' and ! $self->{in_interesting}) {
-			print {$self->{FH}} "$data->{_content}</$Element>";
+			print {$self->{FH}} $self->escape_value($data->{_content})."</$Element>";
 
 		} else { # a predefined rule
 
@@ -1061,17 +1103,28 @@ sub _End {
 			} elsif ($rule eq 'raw extended array') {
 				@results = ('@:'.$Element => $data, [$Element => $data]);
 
-			} elsif ($rule =~ /^by\s+(\S+)$/) {
-				my $attr = $1;
+			} elsif ($rule =~ /^((?:no )?content )?by\s+(\S+)$/) {
+				my ($cnt,$attr) = ($1,$2);
+				if ($cnt eq 'no content ') {
+					delete $data->{_content};
+				}
 				if ($attr =~ /,/) {
 					my @attr = split /,/, $attr;
 					foreach (@attr) {
 						next unless exists ($data->{$_});
-						@results = (delete $data->{$_} => $data);
+						if ($cnt eq 'content ') {
+							@results = ($data->{$_} => $data->{_content})
+						} else {
+							@results = (delete $data->{$_} => $data)
+						}
 						last;
 					}
 				} else {
-					@results = (delete $data->{$attr} => $data);
+					if ($cnt eq 'content ') {
+						@results = ($data->{$attr} => $data->{_content})
+					} else {
+						@results = (delete $data->{$attr} => $data);
+					}
 				}
 
 			} else {
@@ -1138,7 +1191,27 @@ sub _End {
 				} else {
 					$self->{data}[-1]{$key} = $value;
 				}
+			} elsif ($key =~ s/^\%//) {
+				if (exists($self->{data}[-1]{$key})) {
+					if (ref($value) eq 'HASH') {
+						%{$self->{data}[-1]{$key}} = (%{$self->{data}[-1]{$key}}, %$value);
+					} elsif (ref($value) eq 'ARRAY') {
+						%{$self->{data}[-1]{$key}} = (%{$self->{data}[-1]{$key}}, @$value);
+					} else {
+						croak "The value of the rule return \%$key must be a hash or array ref!";
+					}
+				} else {
+					if (ref($value) eq 'HASH') {
+						$self->{data}[-1]{$key} = $value;
+					} elsif (ref($value) eq 'ARRAY') {
+						$self->{data}[-1]{$key} = {@$value};
+					} else {
+						croak "The value of the rule return \%$key must be a hash or array ref!";
+					}
+				}
 			} else {
+				warn "The attribute '$key' already exists for tag $self->{context}[-1].\n  old value: $self->{data}[-1]{$key}\n  new value: $value\n"
+					if ($self->{opt}{warnoverwrite} and exists $self->{data}[-1]{$key} and $self->{data}[-1]{$key} ne $value);
 				$self->{data}[-1]{$key} = $value;
 			}
 		}
@@ -1221,15 +1294,18 @@ the closing tags and returns the resulting structure.
 
 =head2 filter
 
+	$parser->filter( $string);
 	$parser->filter( $string, $OutputIOhandle [, $parameters]);
 	$parser->filter( $InputIOhandle, $OutputIOhandle [, $parameters]);
+	$parser->filter( $string, $OutputFilename [, $parameters]);
+	$parser->filter( $InputIOhandle, $OutputFilename [, $parameters]);
 	$parser->filter( $string, $StringReference [, $parameters]);
 	$parser->filter( $InputIOhandle, $StringReference [, $parameters]);
 
 Parses the XML in the string or reads and parses the XML from the opened IO handle,
 copies the tags that do not have a subroutine rule specified and do not occure under such a tag,
-executes the specified rules and prints the results to $OutputIOhandle or stores them in the scalar
-referenced by $StringReference.
+executes the specified rules and prints the results to select()ed filehandle, $OutputFilename or
+$OutputIOhandle or stores them in the scalar referenced by $StringReference.
 
 The scalar or reference passed as the third parameter to the filter() method is assigned to
 $parser->{parameters} for the parsing of the file or string. Once the XML is parsed the key is
@@ -1244,9 +1320,16 @@ Just an alias to ->filter().
 =head2 filterfile
 
 	$parser->filterfile( $filename, $OutputIOhandle [, $parameters]);
+	$parser->filterfile( $filename, $OutputFilename [, $parameters]);
 
-Opens the specified file and parses the XML and executes the rules as it encounters
-the closing tags and returns the resulting structure.
+Parses the XML in the specified file, copies the tags that do not have a subroutine rule specified
+and do not occure under such a tag, executes the specified rules and prints the results to select()ed
+filehandle, $OutputFilename or $OutputIOhandle or stores them in the scalar
+referenced by $StringReference.
+
+The scalar or reference passed as the third parameter to the filter() method is assigned to
+$parser->{parameters} for the parsing of the file or string. Once the XML is parsed the key is
+deleted. This means that the $parser does not retain a reference to the $parameters after the parsing.
 
 =cut
 
@@ -1543,6 +1626,256 @@ These two work via raising an exception, the exception is caught within the $par
 It's also safe to raise any other exception within the rules, the exception will be caught as well, the internal state of the $parser object
 is cleaned and the exception is rethrown.
 
+=head2 inferRulesFromExample
+
+	Dumper(XML::Rules::inferRulesFromExample( $fileOrXML, $fileOrXML, $fileOrXML, ...)
+	Dumper(XML::Rules->inferRulesFromExample( $fileOrXML, $fileOrXML, $fileOrXML, ...)
+	Dumper($parser->inferRulesFromExample( $fileOrXML, $fileOrXML, $fileOrXML, ...)
+
+The subroutine parses the listed files and infers the rules that would produce the minimal, but complete datastructure.
+It finds out what tags may be repeated, whether they contain text content, attributes etc. You may want to give
+the subroutine several examples to make sure it knows about all possibilities. You should use this once and store
+the generated rules in your script or even take this as the basis of a more specific set of rules.
+
+=cut
+
+sub inferRulesFromExample {
+	shift(@_) if $_[0] eq 'XML::Rules' or ref($_[0]);
+	my @files = @_;
+
+	my %rules;
+
+	my $parser = XML::Rules->new(
+		namespaces => { '*' => ''},
+		rules => {
+			_default => sub {
+				my ($tag, $attrs, $context, $parent_data, $parser) = @_;
+				my $repeated = (exists $parent_data->[-1] and exists $parent_data->[-1]{$tag});
+				my $has_content = (exists $attrs->{_content});
+				my $has_children = grep ref($_) eq 'HASH', values %$attrs;
+				my $has_attr = grep {$_ ne '_content' and !ref($attrs->{$_})} keys %$attrs;
+
+				my $rule = do {
+					if ($repeated) {
+						if ($has_content) {
+							if ($has_attr or $has_children) {
+								'as array'
+							} else {
+								'content array'
+							}
+						} else {
+							if ($has_attr or $has_children) {
+								'as array no content'
+							} else {
+								'content array'
+							}
+						}
+					} else {
+						if ($has_content) {
+							if ($has_attr or $has_children) {
+								'as is'
+							} else {
+								'content'
+							}
+						} else {
+							if ($has_attr or $has_children) {
+								'no content'
+							} else {
+								'content'
+							}
+						}
+					}
+				};
+
+				if (not exists $rules{$tag}) {
+					$rules{$tag} = $rule
+				} elsif($rules{$tag} ne $rule) {
+					# we've already seen the tag and it had different type
+					if ($rules{$tag} eq 'raw extended array') {
+					} elsif ($rule eq 'raw extended array') {
+						$rules{$tag} = 'raw extended array';
+					} elsif ($rules{$tag} eq 'raw extended' and $rule =~ /array/
+						or $rule eq 'raw extended' and $rules{$tag} =~ /array/) {
+						$rules{$tag} = 'raw extended array'
+					} elsif ($rules{$tag} eq 'as array' or $rule eq 'as array') {
+						$rules{$tag} = 'as array'
+					} elsif ($rules{$tag} eq 'content array' and $rule eq 'content'
+						or $rule eq 'content array' and $rules{$tag} eq 'content') {
+						$rules{$tag} = 'content array'
+					} elsif ($rules{$tag} eq 'content array' and $rule eq 'as array no content'
+						or $rule eq 'content array' and $rules{$tag} eq 'as array no content') {
+						$rules{$tag} = 'as array'
+					} elsif ($rules{$tag} eq 'content array' and $rule eq 'as is'
+						or $rule eq 'content array' and $rules{$tag} eq 'as is') {
+						$rules{$tag} = 'as array'
+					} elsif ($rules{$tag} eq 'content array' and $rule eq 'no content'
+						or $rule eq 'content array' and $rules{$tag} eq 'no content') {
+						$rules{$tag} = 'as array'
+					} elsif ($rules{$tag} eq 'as array no content' and $rule eq 'as is'
+						or $rule eq 'as array no content' and $rules{$tag} eq 'as is') {
+						$rules{$tag} = 'as array'
+					} elsif ($rules{$tag} eq 'as array no content' and $rule eq 'content'
+						or $rule eq 'as array no content' and $rules{$tag} eq 'content') {
+						$rules{$tag} = 'as array'
+					} elsif ($rules{$tag} eq 'as array no content' and $rule eq 'no content'
+						or $rule eq 'as array no content' and $rules{$tag} eq 'no content') {
+						$rules{$tag} = 'as array no content'
+					} elsif ($rules{$tag} eq 'as is' and ($rule eq 'no content' or $rule eq 'content')
+						or $rule eq 'as is' and ($rules{$tag} eq 'no content' or $rules{$tag} eq 'content')) {
+						$rules{$tag} = 'as is'
+					} elsif ($rules{$tag} eq 'content' and $rule eq 'no content'
+						or $rule eq 'content' and $rules{$tag} eq 'no content') {
+						$rules{$tag} = 'as is'
+					} else {
+						die "Unexpected combination of rules: old=$rules{$tag}, new=$rule for tag $tag\n";
+					}
+				}
+
+				if ($has_content and $has_children) { # the tag contains both text content and subtags!, need to use the raw extended rules
+					foreach my $child (grep ref($attrs->{$_}) eq 'HASH', keys %$attrs) {
+						next if $rules{$child} =~ /^raw extended/;
+						if ($rules{$child} =~ /array/) {
+							$rules{$child} = 'raw extended array'
+						} else {
+							$rules{$child} = 'raw extended'
+						}
+					}
+				}
+				return $tag => {};
+			}
+		},
+		stripspaces => 7,
+	);
+
+	for (@files) {
+		eval {
+			$parser->parse($_);
+		} or croak "Error parsing $_: $@\n";
+	}
+
+	my %short_rules;
+	foreach my $tag (sort keys %rules) {
+		push @{$short_rules{$rules{$tag}}}, $tag
+	}
+
+	foreach my $tags (values %short_rules) {
+		$tags = join ',', @$tags;
+	}
+	%short_rules = reverse %short_rules;
+
+	return \%short_rules;
+}
+
+=head3 inferRulesFromDTD
+
+	Dumper(XML::Rules::inferRulesFromDTD( $DTDfile, [$enableExtended]))
+	Dumper(XML::Rules->inferRulesFromDTD( $DTDfile, [$enableExtended]))
+	Dumper($parser->inferRulesFromDTD( $DTDfile, [$enableExtended]))
+
+The subroutine parses the DTD and infers the rules that would produce the minimal, but complete datastructure.
+It finds out what tags may be repeated, whether they contain text content, attributes etc. You may use this
+each time you are about to parse the XML, once and store the generated rules in your script or even take this
+as the basis of a more specific set of rules.
+
+With the second parameter set to a true value, the tags included in a mixed content will use the "raw extended"
+or "raw extended array" types instead of just "raw". This makes sure the tag data both stay at the right place in
+the content and are accessible easily from the parent tag's atrribute hash.
+
+This requires the XML::DTDParser module!
+
+=cut
+
+sub inferRulesFromDTD {
+	require XML::DTDParser;
+
+	my ($DTDfile, $enable_extended) = @_;
+
+	my $DTD = XML::DTDParser::ParseDTDFile($DTDfile);
+
+	my $has_mixed = 0;
+	foreach my $tag (values %$DTD) {
+		$tag->{is_mixed} = (($tag->{content} and $tag->{children}) ? 1 : 0)
+		 and $has_mixed = 1;
+	}
+
+	my %settings;
+	foreach my $tagname (keys %$DTD) {
+		my $tag = $DTD->{$tagname};
+
+		my $repeated = ($tag->{option} =~ /^[+*]$/ ? 1 : 0);
+		my $has_content = $tag->{content};
+
+		my $in_mixed = grep {$DTD->{$_}{is_mixed}} @{$tag->{parent}};
+
+		if ($in_mixed) {
+			if ($enable_extended) {
+				if ($repeated) {
+					$settings{$tagname} = "raw extended array"
+				} else {
+					$settings{$tagname} = "raw extended"
+				}
+			} else {
+				$settings{$tagname} = "raw"
+			}
+		} else {
+			if (exists $DTD->{attributes} or exists $tag->{children}) {
+				my @ids ;
+				if (exists $DTD->{attributes}) {
+					@ids = grep {$DTD->{attributes}{$_}[0] eq 'ID' and $DTD->{attributes}{$_}[0] eq '#REQUIRED'} keys %{$DTD->{attributes}};
+				}
+				if (scalar(@ids) == 1) {
+					if ($has_content) {
+						$settings{$tagname} = "by $ids[0]"
+					} else {
+						$settings{$tagname} = "no content by $ids[0]"
+					}
+				} else {
+					if ($has_content) {
+						if ($repeated) {
+							$settings{$tagname} = "as array"
+						} else {
+							$settings{$tagname} = "as is"
+						}
+					} else {
+						if ($repeated) {
+							$settings{$tagname} = "as array no content"
+						} else {
+							$settings{$tagname} = "no content"
+						}
+					}
+				}
+			} elsif ($repeated) {
+				$settings{$tagname} = "content array"
+			} else {
+				$settings{$tagname} = "content array"
+			}
+		}
+	}
+
+#	use Data::Dumper;
+#	print Dumper(\%settings);
+
+	my %compressed;
+	{
+		my %tmp;
+		while (my ($tag, $option) = each %settings) {
+			push @{$tmp{$option}}, $tag;
+		}
+
+		while (my ($option, $tags) = each %tmp) {
+			$compressed{join ',', @$tags} = $option
+		}
+	}
+
+	if ($has_mixed) {
+		$compressed{"#stripspaces"} = 0;
+	} else {
+		$compressed{"#stripspaces"} = 7;
+	}
+
+	return \%compressed;
+}
+
 =head1 Properties
 
 =head2 parameters
@@ -1621,7 +1954,8 @@ and know the tags defined by SOAP do not colide with the tags in the enclosed XM
 you may simplify the parsing by removing all namespace aliases.
 
 If the XML references a namespace not present in the map you will get a warning
-and the alias used for that namespace will be left intact!
+and the alias used for that namespace will be left intact! If you do not want to get the warnings specify
+a namespace with URI "*".
 
 
 =head1 HOW TO USE
@@ -1637,6 +1971,15 @@ the snippet of data you just received onto the structure you are building.
 You can use it in a way similar to XML::Twig with simplify(), specify the rules to transform the lower
 level tags into a XML::Simple like (simplify()ed) structure and then handle the structure in the rule for
 the tag(s) you'd specify in XML::Twig's twig_roots.
+
+=head1 Unrelated tricks
+
+If you need to parse a XML file without the top-most tag (something that each and any sane person would allow,
+but the XML comitee did not), you can parse
+
+  <!DOCTYPE doc [<!ENTITY real_doc SYSTEM "$the_file_name">]><doc>&real_doc;</doc>
+
+instead.
 
 =head1 AUTHOR
 
@@ -1679,9 +2022,13 @@ L<http://search.cpan.org/dist/XML-Rules>
 =item * PerlMonks
 
 Please see L<http://www.perlmonks.org/?node_id=581313> or
-L<http://www.perlmonks.org/?node=XML::Rules>for discussion.
+L<http://www.perlmonks.org/?node=XML::Rules> for discussion.
 
 =back
+
+=head1 SEE ALSO
+
+L<XML::Twig>, L<XML::LibXML>, L<XML::Pastor>
 
 =head1 ACKNOWLEDGEMENTS
 
