@@ -17,11 +17,11 @@ XML::Rules - parse XML and specify what and how to keep/process for individual t
 
 =head1 VERSION
 
-Version 1.03
+Version 1.04
 
 =cut
 
-our $VERSION = '1.03';
+our $VERSION = '1.04';
 
 =head1 SYNOPSIS
 
@@ -847,14 +847,16 @@ sub _Start {
 		) {
 			# ignore the tag and the ones below
 			if (exists $self->{ignore_handlers}) {
-				$self->{parser}->setHandlers(@{$self->{ignore_handlers}})
+#print "SETHANDLERS!\n";
+				$Parser->setHandlers(@{$self->{ignore_handlers}})
 			} else {
 				$self->{ignore_handlers} = [
 					Start => _StartIgnore($self),
 					Char => undef,
 					End => _EndIgnore($self),
 				];
-				$self->{normal_handlers} = [$self->{parser}->setHandlers(@{$self->{ignore_handlers}})];
+#print "SETHANDLERS2\n";
+				$self->{normal_handlers} = [$Parser->setHandlers(@{$self->{ignore_handlers}})];
 			}
 			$self->{ignore_level}=1;
 
@@ -871,20 +873,17 @@ sub _Start {
 			$self->{lastempty} = 0;
 
 			if ($self->{style} eq 'filter') {
-				if (! $self->{in_interesting}) { # if neither of the ancestors was interesting (had a specific rule) print its content so far
-					if (@{$self->{data}}>=2) {
-						print {$self->{FH}} $self->escape_value($self->{data}->[-2]{_content});
-						delete $self->{data}->[-2]{_content};
-					}
-				}
-
 				$self->{in_interesting}++ if ref($end_rule) or $end_rule =~ /^=/s; # is this tag interesting?
 
 				if (! $self->{in_interesting}) { # it neither this tag not an acestor is interesting, just copy the tag
+#print "Start:R ".$Parser->recognized_string()."\n";
+#print "Start:O ".$Parser->original_string()."\n";
+#print "Start:R ".$Parser->recognized_string()."\n";
+#print "Start:O ".$Parser->original_string()."\n";
 					if (! $output_encoding) {
-						print {$self->{FH}} $self->{parser}->recognized_string();
+						print {$self->{FH}} $Parser->recognized_string();
 					} elsif ($output_encoding eq $self->{opt}{original_encoding}) {
-						print {$self->{FH}} $self->{parser}->original_string();
+						print {$self->{FH}} $Parser->original_string();
 					} else {
 						print {$self->{FH}} $self->toXML($Element, \%Attr, "don't close");
 					}
@@ -928,6 +927,17 @@ sub _Char {
 	my $encode = $self->{opt}{encode};
 	return sub {
 		my ( $Parser, $String) = @_;
+
+		if ($self->{style} eq 'filter' and ! $self->{in_interesting}) {
+			if (! $self->{opt}{output_encoding}) {
+				print {$self->{FH}} $Parser->recognized_string();
+			} elsif ($self->{opt}{output_encoding} eq $self->{opt}{original_encoding}) {
+				print {$self->{FH}} $Parser->original_string();
+			} else {
+				print {$self->{FH}} encode($self->{opt}{output_encoding}, $Parser->recognized_string());
+			}
+			return;
+		}
 
 		if ($encode) {
 			$String = Encode::encode( $encode, $String);
@@ -1053,7 +1063,16 @@ sub _End {
 				}
 			}
 		} elsif ($self->{style} eq 'filter' and ! $self->{in_interesting}) {
-			print {$self->{FH}} $self->escape_value($data->{_content})."</$Element>";
+#print "End: \$Element=$Element; \$Parser->recognized_string()=".$Parser->recognized_string()."; \$Parser->original_string()=".$Parser->original_string()."\n";
+die "Unexpected \$data->{content}={$data->{_content}} in filter outside interesting nodes!\n" if $data->{_content} ne '';
+				if (! $self->{opt}{output_encoding}) {
+					print {$self->{FH}} $Parser->recognized_string();
+				} elsif ($self->{opt}{output_encoding} eq $self->{opt}{original_encoding}) {
+					print {$self->{FH}} $Parser->original_string();
+				} else {
+					print {$self->{FH}} encode($self->{opt}{output_encoding}, $Parser->recognized_string());
+				}
+#			print {$self->{FH}} $self->escape_value($data->{_content})."</$Element>";
 
 		} else { # a predefined rule
 
@@ -1403,15 +1422,19 @@ sub toXML {
 		if (! ref($attrs)) { # ->toXML( '', $string_content, ...)
 			return $self->escape_value($attrs);
 		} elsif (ref($attrs) eq 'ARRAY') {
-			return join( '', map {
-				if (!ref($_)) {
-					$self->escape_value($_)
-				} elsif (ref($_) eq 'ARRAY' and @$_ == 2) {
-					$self->toXML($_->[0], $_->[1])
-				} else {
-					croak "The content in XML::Rules->ToXML( '', here) must be a string or an arrayref containing strings and two element arrayrefs!";
-				}
-			} @$attrs);
+			if (@$attrs) {
+				return join( '', map {
+					if (!ref($_)) {
+						$self->escape_value($_)
+					} elsif (ref($_) eq 'ARRAY' and @$_ == 2) {
+						$self->toXML($_->[0], $_->[1])
+					} else {
+						croak "The content in XML::Rules->ToXML( '', here) must be a string or an arrayref containing strings and two element arrayrefs!";
+					}
+				} @$attrs);
+			} else {
+				return "<$attrs/>"
+			}
 		}
 	}
 
@@ -1435,8 +1458,12 @@ sub toXML {
 		next if $key =~ /^:/ or $key eq '_content';
 		if (ref $attrs->{$key}) {
 			if (ref $attrs->{$key} eq 'ARRAY') {
-				foreach my $subtag (@{$attrs->{$key}}) {
-					$subtags .= $prefix . $ident . $self->toXML($key, $subtag, 0, $ident, $base.$ident);
+				if (@{$attrs->{$key}}) {
+					foreach my $subtag (@{$attrs->{$key}}) {
+						$subtags .= $prefix . $ident . $self->toXML($key, $subtag, 0, $ident, $base.$ident);
+					}
+				} else {
+					$subtags .= $prefix . $ident . "<$key/>";
 				}
 			} elsif (ref $attrs->{$key} eq 'HASH') {
 				$subtags .= $prefix . $ident . $self->toXML($key, $attrs->{$key}, 0, $ident, $base.$ident)
@@ -1749,7 +1776,11 @@ sub inferRulesFromExample {
 
 	for (@files) {
 		eval {
-			$parser->parse($_);
+			if (! ref($_) and $_ !~ /\n/ and $_ !~ /^\s*</) {
+				$parser->parsefile($_);
+			} else {
+				$parser->parse($_);
+			}
 		} or croak "Error parsing $_: $@\n";
 	}
 
@@ -1766,7 +1797,7 @@ sub inferRulesFromExample {
 	return \%short_rules;
 }
 
-=head3 inferRulesFromDTD
+=head2 inferRulesFromDTD
 
 	Dumper(XML::Rules::inferRulesFromDTD( $DTDfile, [$enableExtended]))
 	Dumper(XML::Rules->inferRulesFromDTD( $DTDfile, [$enableExtended]))
@@ -1781,7 +1812,7 @@ With the second parameter set to a true value, the tags included in a mixed cont
 or "raw extended array" types instead of just "raw". This makes sure the tag data both stay at the right place in
 the content and are accessible easily from the parent tag's atrribute hash.
 
-This requires the XML::DTDParser module!
+This subroutine requires the XML::DTDParser module!
 
 =cut
 

@@ -2,7 +2,7 @@
 
 use strict;
 use warnings;
-use Test::More tests => 39;
+use Test::More tests => 42;
 use Data::Dumper;
 use Encode qw(encode);
 
@@ -103,6 +103,21 @@ is( $xml, $new_xml, "Parse and output");
 {
 	my $res = $parser->ToXML( 'data', {x => $data_utf8});
 	is( $res, qq{<data x="$data_utf8"/>}, "Tag with no content and one attribute with accents");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {foo => {}});
+	is( $res, '<data><foo/></data>', "Tag containg tag with no content");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {foo => []});
+	is( $res, '<data><foo/></data>', "Tag containg tag with no content");
+}
+
+{
+	my $res = $parser->ToXML( 'data', {foo => ['']});
+	is( $res, '<data><foo></foo></data>', "Tag containg tag with empty string content");
 }
 
 { # rules: windows, output: utf8

@@ -39,6 +39,8 @@ my $xml = <<'*END*';
    <phone type="office">663-486-7891</phone>
   </phones>
  </person>
+ <start_only/>
+ <empty></empty>
 </doc>
 *END*
 
@@ -215,6 +217,8 @@ my $xml = <<'*END*';
    <office>(1)663-486-7891</office>
   </phones>
  </person>
+ <start_only/>
+ <empty></empty>
 </doc>
 *END*
 
@@ -270,6 +274,8 @@ my $xml = <<'*END*';
    <office>(1)663-486-7891</office>
   </phones>
  </person>
+ <start_only/>
+ <empty></empty>
 </doc>
 *END*
 

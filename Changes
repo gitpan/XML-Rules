@@ -54,3 +54,6 @@ Revision history for XML-Rules
 		Added '%key' style returns
 		Added 'content by <attrname>' and 'no content by <attrname' builtin rules
 		Added inferRulesFromDTD and inferRulesFromExample
+
+1.04	2008-08-16
+		Fixed incorrect handling of <tag/> in filters outside interesting tags
