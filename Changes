@@ -57,3 +57,7 @@ Revision history for XML-Rules
 
 1.04	2008-08-16
 		Fixed incorrect handling of <tag/> in filters outside interesting tags
+
+1.05	2008-09-05
+		Fixed handling of rules for tags that sometimes are within another
+		tag with sub{} rule and sometimes not in filters

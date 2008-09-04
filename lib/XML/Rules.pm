@@ -17,11 +17,11 @@ XML::Rules - parse XML and specify what and how to keep/process for individual t
 
 =head1 VERSION
 
-Version 1.04
+Version 1.05
 
 =cut
 
-our $VERSION = '1.04';
+our $VERSION = '1.05';
 
 =head1 SYNOPSIS
 
@@ -1034,20 +1034,27 @@ sub _End {
 					if ($self->{opt}{ident} ne '') {
 						$base = $self->{opt}{ident} x scalar(@{$self->{context}});
 					}
+					@results and $results[0] =~ s/^[\@%\+\*\.]//;
 					while (@results) {
+#use Data::Dumper;
+#print "\@results=".Dumper(\@results)."\n";
 						if (ref($results[0])) {
 							croak(ref($results[0]) . " not supported as the return value of a filter") unless ref($results[0]) eq 'ARRAY';
-							foreach my $item (@{$results[0]}) {
-								if (ref($item)) {
-									croak(ref($item) . " not supported in the return value of a filter") unless ref($item) eq 'ARRAY';
-									croak("Empty array not supported in the return value of a filter") unless @$item;
-									if (@$item <= 2) {
-										print {$self->{FH}} $self->toXML(@{$item}[0,1], 0, $self->{opt}{ident}, $base);
-									} else { # we suppose the 3rd and following elements are parameters to ->toXML()
-										print {$self->{FH}} $self->toXML(@$item);
+							if (@{$results[0]} ==2 and ref($results[0][1]) eq 'HASH') {
+								print {$self->{FH}} $self->toXML(@{$results[0]}[0,1], 0, $self->{opt}{ident}, $base);
+							} else {
+								foreach my $item (@{$results[0]}) {
+									if (ref($item)) {
+										croak(ref($item) . " not supported in the return value of a filter") unless ref($item) eq 'ARRAY';
+										croak("Empty array not supported in the return value of a filter") unless @$item;
+										if (@$item <= 2) {
+											print {$self->{FH}} $self->toXML(@{$item}[0,1], 0, $self->{opt}{ident}, $base);
+										} else { # we suppose the 3rd and following elements are parameters to ->toXML()
+											print {$self->{FH}} $self->toXML(@$item);
+										}
+									} else {
+										print {$self->{FH}} $self->escape_value($item);
 									}
-								} else {
-									print {$self->{FH}} $self->escape_value($item);
 								}
 							}
 							shift(@results);
