@@ -18,6 +18,7 @@ t/07-content_whitespace.t
 t/08-whitespace_more.t
 t/09-whitespace_one.t
 t/10-infer.t
+t/11-namespaces-other.t
 t/boilerplate.t
 t/pod-coverage.t
 t/pod.t

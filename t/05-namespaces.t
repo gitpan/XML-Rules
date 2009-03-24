@@ -157,5 +157,8 @@ my $xml_foo = <<'*END*';
 
 	$result = $parser->parsestring($xml);
 
+use Data::Dumper;
+print Dumper($result);
+
 	is_deeply( $result, $correct, "XML with nested aliased namespaces");
 }

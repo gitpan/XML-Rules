@@ -61,3 +61,6 @@ Revision history for XML-Rules
 1.05	2008-09-05
 		Fixed handling of rules for tags that sometimes are within another
 		tag with sub{} rule and sometimes not in filters
+
+1.06	2009-03-24
+		Improved namespace handling

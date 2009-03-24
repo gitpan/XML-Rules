@@ -11,17 +11,27 @@ our @EXPORT_OK = qw(paths2rules);
 
 use XML::Parser::Expat;
 
+use constant STRIP => "0000";
+use constant STRIP_RULE => 'pass';
+
+#use Data::Dumper;
+#$Data::Dumper::Indent = 1;
+#$Data::Dumper::Terse = 1;
+#$Data::Dumper::Quotekeys = 0;
+#$Data::Dumper::Sortkeys = 1;
+
+
 =head1 NAME
 
 XML::Rules - parse XML and specify what and how to keep/process for individual tags
 
 =head1 VERSION
 
-Version 1.05
+Version 1.06
 
 =cut
 
-our $VERSION = '1.05';
+our $VERSION = '1.06';
 
 =head1 SYNOPSIS
 
@@ -100,9 +110,9 @@ I'm exagerating of course, but you probably know what I mean. You can of course 
 You can also use XML::Simple and generate an almost equaly huge maze of hashes and arrays ... which may make the code more or less complex. In either case you need to have enough memory
 to store all that data, even if you only need a piece here and there.
 
-Another way to parse the XML is to create some subroutines that handle the start and end tags and the text and whatever else may appear in the XML. Some modules will let you specify just one for start tag, one for text and one for end tag, others will let you install different handlers for different tags. The catch is that you have to build your data structures yourself, you have to know where you are, what tag is just open and what is the parent and it's parent etc. so that you could add the attributes and especially the text to the right place. And the handlers have to do everything as their side effect. Does anyone remember what do they say about side efects? They make the code hard to debug, they tend to change the code into a maze of interdependent snippets of code.
+Another way to parse the XML is to create some subroutines that handle the start and end tags and the text and whatever else may appear in the XML. Some modules will let you specify just one for start tag, one for text and one for end tag, others will let you install different handlers for different tags. The catch is that you have to build your data structures yourself, you have to know where you are, what tag is just open and what is the parent and its parent etc. so that you could add the attributes and especially the text to the right place. And the handlers have to do everything as their side effect. Does anyone remember what do they say about side efects? They make the code hard to debug, they tend to change the code into a maze of interdependent snippets of code.
 
-So what's the difference in the way XML::Rules works? At the first glance, not much. You can also specify subroutines to be called for the tags encountered while parsing the XML, just like the other even based XML parsers. The difference is that you do not have to rely on sideeffects if all you want is to store the value of a tag. You simply return whatever you need from the current tag and the module will add it at the right place in the data structure it builds and will provide it to the handlers for the parent tag. And if the parent tag does return that data again it will be passed to its parent and so forth. Until we get to the level at which it's convenient to handle all the data we accumulated from the twig.
+So what's the difference in the way XML::Rules works? At the first glance, not much. You can also specify subroutines to be called for the tags encountered while parsing the XML, just like the other even based XML parsers. The difference is that you do not have to rely on side-effects if all you want is to store the value of a tag. You simply return whatever you need from the current tag and the module will add it at the right place in the data structure it builds and will provide it to the handlers for the parent tag. And if the parent tag does return that data again it will be passed to its parent and so forth. Until we get to the level at which it's convenient to handle all the data we accumulated from the twig.
 
 Do we want to keep just the content and access it in the parent tag handler under a specific name?
 
@@ -152,6 +162,23 @@ so that you do not have to care whether there was
 or
 
 	<address><street>Larry Wall's St.</street><streetno>478</streetno><city>Core</city><country>The Programming Republic of Perl</country></address>
+
+And if you do not like to end up with a datastructure of plain old arrays and hashes, you can create application specific objects in the rules
+
+	address => sub {
+		my $type = lc(delete $_[1]->{type});
+		$type.'Address' => MyApp::Address->new(%{$_[1]})
+	},
+	person => sub {
+		'@person' => MyApp::Person->new(
+			firstname => $_[1]->{fname},
+			lastname => $_[1]->{lname},
+			deliveryAddress => $_[1]->{deliveryAddress},
+			billingAddress => $_[1]->{billingAddress},
+			phone => $_[1]->{phone},
+		)
+	}
+
 
 At each level in the tree structure serialized as XML you can decide what to keep, what to throw away, what to transform and then just return the stuff you care about and it will be available to the handler at the next level.
 
@@ -384,6 +411,17 @@ The subroutines receive the same parameters as for the "end tag" rules except of
 If the subroutine returns a false value then the whole branch enclosed by the current tag is skipped, no data are stored and no rules are
 executed. You may modify the hash referenced by $attr.
 
+You may even tie() the hash referenced by $attr, for example in case you want to store the parsed data in a DBM::Deep.
+In such case all the data returned by the immediate subtags of this tag will be stored in the DBM::Deep.
+Make sure you do not overwrite the data by data from another occurance of the same tag if you return $_[1]/$attr from the rule!
+
+	YourHugeTag => sub {
+		my %temp = %{$_[1]};
+		tie %{$_[1]}, 'DBM::Deep', $filename;
+		%{$_[1]} = %temp;
+		1;
+	}
+
 Both types of rules are free to store any data they want in $parser->{pad}. This property is NOT emptied
 after the parsing!
 
@@ -460,6 +498,14 @@ sub new {
 		croak 'XML::Rules->new( ... , namespaces => ...HERE...) must be a hash reference!'
 			unless ref($self->{namespaces}) eq 'HASH';
 		$self->{xmlns_map} = {};
+		if (defined $self->{namespaces}{'*'}) {
+			if (! grep $_ eq $self->{namespaces}{'*'}, qw(warn die keep strip), '') {
+#				local $Carp::CarpLevel = 2;
+				croak qq{Unknown namespaces->{'*'} option '$self->{namespaces}{'*'}'!};
+			}
+		} else {
+			$self->{namespaces}{'*'} = 'warn';
+		}
 	}
 
 	$self->{style} = delete($params{style}) || 'parser';
@@ -565,7 +611,6 @@ sub _run {
 	}) {
 		my $err = $@;
 		undef $@;
-
 		if ($err =~ /^\[XML::Rules\] skip rest/) {
 			my (undef, $handler) = $self->{parser}->setHandlers(End => undef);
 			foreach my $tag (reverse @{$self->{context} = []}) {
@@ -744,6 +789,18 @@ sub _rtrim {
 	}
 }
 
+sub _findUnusedNs {
+	my ($self, $old_ns) = @_;
+	my $new_ns = $old_ns;
+	my %used;
+	@used{values %{$self->{namespaces}}, values %{$self->{xmlns_map}}}= ();
+	no warnings 'numeric';
+	while (exists $used{$new_ns}) {
+		$new_ns =~ s/(\d*)$/$1+1/e;
+	}
+	return $new_ns;
+}
+
 sub _Start {
 	my $self = shift;
 	my $encode = $self->{opt}{encode};
@@ -767,28 +824,52 @@ sub _Start {
 
 		if ($self->{namespaces}) {
 			my %restore;
+			foreach my $attr (keys %Attr) { # find the namespace aliases
+				next unless $attr =~ /^xmlns:(.*)$/;
+				my $orig_ns = $1;
+				$restore{$orig_ns} = $self->{xmlns_map}{$orig_ns};
+				if (! exists($self->{namespaces}{ $Attr{$attr} })) {
+					if ($self->{namespaces}{'*'} eq 'die') {
+						local $Carp::CarpLevel = 2;
+						croak qq{Unexpected namespace "$Attr{$attr}" found in the XML!};
+					} elsif ($self->{namespaces}{'*'} eq '') {
+						delete $Attr{$attr};
+						$self->{xmlns_map}{$orig_ns} = '';
+					} elsif ($self->{namespaces}{'*'} eq 'strip') {
+						delete $Attr{$attr};
+						$self->{xmlns_map}{$orig_ns} = STRIP;
+					} else {
+						warn qq{Unexpected namespace "$Attr{$attr}" found in the XML!\n} if ($self->{namespaces}{'*'} eq 'warn');
+						my $new_ns = $self->_findUnusedNs( $orig_ns);
+						if ($orig_ns ne $new_ns) {
+							$Attr{'xmlns:' . $new_ns} = delete $Attr{$attr};
+						}
+						$self->{xmlns_map}{$orig_ns} = $new_ns;
+					}
+				} else {
+					$self->{xmlns_map}{$orig_ns} = $self->{namespaces}{ delete($Attr{$attr}) };
+				}
+			}
 			if (exists $Attr{xmlns}) { # find the default namespace
 #print "Found a xmlns attribute in $Element!\n";
 				$restore{''} = $self->{xmlns_map}{''};
-				if (!exists($self->{namespaces}{ $Attr{xmlns} })) {
-					warn qq{Unexpected namespace "$Attr{xmlns}" found in the XML!\n} unless exists $self->{namespaces}{'*'};
-					delete $self->{xmlns_map}{''};
-					delete $restore{''} unless defined($restore{''});
-					delete($Attr{xmlns});
+				if (!exists($self->{namespaces}{ $Attr{xmlns} })) { # unknown namespace
+					if ($self->{namespaces}{'*'} eq 'die') {
+						local $Carp::CarpLevel = 2;
+						croak qq{Unexpected namespace "$Attr{xmlns}" found in the XML!};
+					} elsif ($self->{namespaces}{'*'} eq '') {
+						delete $Attr{xmlns};
+					} elsif ($self->{namespaces}{'*'} eq 'strip') {
+						delete $Attr{xmlns};
+						$self->{xmlns_map}{''} = STRIP;
+					} else { # warn or keep
+						warn qq{Unexpected namespace "$Attr{xmlns}" found in the XML!\n} if ($self->{namespaces}{'*'} eq 'warn');
+						my $new_ns = $self->_findUnusedNs( 'ns1');
+						$Attr{'xmlns:'.$new_ns} = delete $Attr{xmlns};
+						$self->{xmlns_map}{''} = $new_ns;
+					}
 				} else {
 					$self->{xmlns_map}{''} = $self->{namespaces}{ delete($Attr{xmlns}) };
-				}
-			}
-			foreach my $attr (keys %Attr) { # find the namespace aliases
-				next unless $attr =~ /^xmlns:(.*)$/;
-				$restore{$1} = $self->{xmlns_map}{$1};
-				if (!exists($self->{namespaces}{ $Attr{$attr} })) {
-					warn qq{Unexpected namespace "$Attr{$attr}" found in the XML!\n} unless exists $self->{namespaces}{'*'};
-					delete $self->{xmlns_map}{$1};
-					delete $restore{$1} unless defined($restore{$1});
-					delete($Attr{$attr});
-				} else {
-					$self->{xmlns_map}{$1} = $self->{namespaces}{ delete($Attr{$attr}) };
 				}
 			}
 			if (%restore) {
@@ -815,6 +896,7 @@ sub _Start {
 					$Element = $self->{xmlns_map}{''} . ':' . $Element;
 #print " -> $Element\n";
 				}
+				if (substr( $Element, 0, length(STRIP)+1) eq STRIP.':') {%Attr = ()}
 
 				# map the aliases for the attributes
 				foreach my $attr (keys %Attr) {
@@ -822,6 +904,8 @@ sub _Start {
 					next unless exists($self->{xmlns_map}{$1}); # and there's a mapping
 					if ($self->{xmlns_map}{$1} eq '') {
 						$Attr{$2} = delete($Attr{$attr}); # rename the attribute
+					} elsif ($self->{xmlns_map}{$1} eq STRIP) {
+						delete($Attr{$attr}); # remove the attribute
 					} else {
 						$Attr{$self->{xmlns_map}{$1} . ':' . $2} = delete($Attr{$attr}); # rename the attribute
 					}
@@ -897,6 +981,10 @@ sub _Start {
 sub _find_rule {
 	my ($self, $type, $Element, $path) = @_;
 
+	if (substr( $Element, 0, length(STRIP)+1) eq STRIP.':') {
+		return ($type eq 'rules' ? STRIP_RULE : 'handle');
+	}
+
 	if (exists($self->{$type.'_re'})) {
 		for(my $i = 0; $i < @{$self->{$type.'_re'}}; $i++) {
 			if ($Element =~ $self->{$type.'_re'}[$i]) {
@@ -927,6 +1015,8 @@ sub _Char {
 	my $encode = $self->{opt}{encode};
 	return sub {
 		my ( $Parser, $String) = @_;
+
+		return if (substr( $self->{context}[-1], 0, length(STRIP)+1) eq STRIP.':');
 
 		if ($self->{style} eq 'filter' and ! $self->{in_interesting}) {
 			if (! $self->{opt}{output_encoding}) {
@@ -1071,7 +1161,7 @@ sub _End {
 			}
 		} elsif ($self->{style} eq 'filter' and ! $self->{in_interesting}) {
 #print "End: \$Element=$Element; \$Parser->recognized_string()=".$Parser->recognized_string()."; \$Parser->original_string()=".$Parser->original_string()."\n";
-die "Unexpected \$data->{content}={$data->{_content}} in filter outside interesting nodes!\n" if $data->{_content} ne '';
+die "Unexpected \$data->{_content}={$data->{_content}} in filter outside interesting nodes!\n" if $data->{_content} ne '';
 				if (! $self->{opt}{output_encoding}) {
 					print {$self->{FH}} $Parser->recognized_string();
 				} elsif ($self->{opt}{output_encoding} eq $self->{opt}{original_encoding}) {
@@ -1934,18 +2024,19 @@ You should refrain from modifying or accessing other properties of the XML::Rule
 
 =head1 Namespace support
 
-By default the module doesn't handle namespaces in any way, it doesn't check for
+By default the module doesn't handle namespaces in any way, it doesn't do anything special with
 xmlns or xmlns:alias attributes and it doesn't strip or mangle the namespace aliases
 in tag or attribute names. This means that if you know for sure what namespace
 aliases will be used you can set up rules for tags including the aliases and unless
 someone decides to use a different alias or makes use of the default namespace
-change your script will work.
+your script will work without turning the namespace support on.
 
 If you do specify any namespace to alias mapping in the constructor it does
 start processing the namespace stuff. The xmlns and xmlns:alias attributes
-are stripped from the datastructures and the aliases are transformed from
-whatever the XML author decided to use to whatever your namespace mapping
-specifies. Aliases are also added to all tags that belong to a default namespace.
+for the known namespaces are stripped from the datastructures and
+the aliases are transformed from whatever the XML author decided to use
+to whatever your namespace mapping specifies. Aliases are also added to all
+tags that belong to a default namespace.
 
 Assuming the constructor parameters contain
 
@@ -1969,7 +2060,8 @@ and the XML looks like this:
 		</other>
 	</root>
 
-then the rules wil be called as if the XML looked like this:
+then the rules wil be called as if the XML looked like this
+while the namespace support is turned off:
 
 	<root>
 		<foo:Foo>
@@ -1985,15 +2077,33 @@ then the rules wil be called as if the XML looked like this:
 	</root>
 
 
-This means that the namespace handling will only normalize the aliases used.
+This means that the namespace handling will normalize the aliases used so that you can use
+them in the rules.
 
 It is possible to specify an empty alias, so eg. in case you are processing a SOAP XML
 and know the tags defined by SOAP do not colide with the tags in the enclosed XML
 you may simplify the parsing by removing all namespace aliases.
 
-If the XML references a namespace not present in the map you will get a warning
-and the alias used for that namespace will be left intact! If you do not want to get the warnings specify
-a namespace with URI "*".
+You can control the behaviour with respect to othe namespaces that you did not include
+in your mapping by setting the "alias" for the special pseudonamespace '*'. The possible values
+of the "alias"are: "warn" (default), "keep", "strip", "" and "die".
+
+warn: whenever an unknown namespace is encountered, XML::Rules prints a warning.
+The xmlns:XX attributes and the XX: aliases are retained for these namespaces.
+If the alias clashes with one specified by your mapping it will be changed in all places.
+The xmlns="..." referencing an unexpected namespace are changed to xmlns:nsN
+and the alias is added to the tag names included.
+
+keep: this works just like the "warn" except for the warning.
+
+strip: all attributes and tags in the unknown namespaces are stripped. If
+a tag in such a namespace contains a tag from a known namespace,
+then the child tag is retained.
+
+"": all the xmlns attributes and the aliases for the unexected namespaces are removed,
+the tags and normal attributes are retained without any alias.
+
+die: as soon as any unexpected namespace is encountered, XML::Rules croak()s.
 
 
 =head1 HOW TO USE
