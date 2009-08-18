@@ -2,6 +2,7 @@
 
 use strict;
 use warnings;
+use utf8;
 use Test::More tests => 18;
 use Data::Dumper;
 use Encode qw(encode);

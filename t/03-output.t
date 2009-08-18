@@ -2,7 +2,7 @@
 
 use strict;
 use warnings;
-use Test::More tests => 42;
+use Test::More tests => 60;
 use Data::Dumper;
 use Encode qw(encode);
 
@@ -34,8 +34,8 @@ my $res = $parser->parse($xml);
 #print Dumper($res);
 my $new_xml = $parser->ToXML(@$res) . "\n";
 #print $new_xml;
-
-is( $xml, $new_xml, "Parse and output");
+#exit;
+is( $new_xml, $xml, "Parse and output");
 
 
 {
@@ -156,13 +156,54 @@ is( $xml, $new_xml, "Parse and output");
 }
 
 {
+	my $res = $parser->ToXML( 'data', [qw(foo)]);
+	is( $res, '<data>foo</data>', "Tag with array of contents with a single item");
+}
+
+{
+	my $res = $parser->ToXML( 'data', []);
+	is( $res, '', "Tag with array of contents with no items");
+}
+
+{
+	my $res = $parser->ToXML( ['data', {id => 1}, qw(foo bar baz)]);
+	is( $res, '<data id="1">foo</data><data id="1">bar</data><data id="1">baz</data>', "Tag with an attribute and array of contents");
+}
+
+{
+	my $res = $parser->ToXML( ['data', {id => 1}, [qw(foo bar baz)]]);
+	is( $res, '<data id="1">foobarbaz</data>', "Tag with an attribute and contents as array");
+}
+
+{
 	my $res = $parser->ToXML( 'data', [{str => 'foo'}, {str => 'bar'}, {str => 'baz'}]);
 	is( $res, '<data str="foo"/><data str="bar"/><data str="baz"/>', "Tag with array of attributes");
 }
 
 {
+	my $res = $parser->ToXML( ['data', {}, {str => 'foo'}, {str => 'bar'}, {str => 'baz'}]);
+	is( $res, '<data str="foo"/><data str="bar"/><data str="baz"/>', "Again as arrayref");
+}
+
+{
+	my $res = $parser->ToXML( ['data', {str => 'foo'}, {str => 'bar'}, {str => 'baz'}]);
+	is( $res, '<data str="bar"/><data str="baz"/>', "Overwrite attribute hashes");
+}
+
+{
+	my $res = $parser->ToXML( ['data' => {name => 'foo'}, {str => 'bar'}, {str => 'baz'}]);
+	is( $res, '<data name="foo" str="bar"/><data name="foo" str="baz"/>', "Merge attribute hashes");
+}
+
+
+{
 	my $res = $parser->ToXML( 'data', {bar => {_content => 'baz'}});
 	is( $res, '<data><bar>baz</bar></data>', "Tag with subtag");
+}
+
+{
+	my $res = $parser->ToXML( ['data', {bar => {_content => 'baz'}}]);
+	is( $res, '<data><bar>baz</bar></data>', "Tag with subtag as arrayref");
 }
 
 {
@@ -270,4 +311,199 @@ is( $xml, $new_xml, "Parse and output");
 {
 	my $res = $parser->ToXML( 'data', {attr => 5, bar => {a => 42, _content=> 'string'}}, 0, '  ', '    ');
 	is( $res, qq{<data attr="5">\n      <bar a="42">string</bar>\n    </data>}, "Tag with attribute and subtag with content and attribute (pretty-print)");
+}
+
+
+# more complex examples. modeled after http://www.perlmonks.org/?node_id=787605
+{
+	my $res = $parser->ToXML( [ family => { name => 'Kawasaki' },
+  [
+    [father => 'Yasushisa' ],
+    [mother => 'Chizuko' ],
+    [children =>
+      [
+        [girl => 'Shiori'],
+        [boy  => 'Yasuke'],
+        [boy  => 'Kairi']
+      ]
+    ]
+  ]
+]);
+	is( $res, qq{<family name="Kawasaki"><father>Yasushisa</father><mother>Chizuko</mother><children><girl>Shiori</girl><boy>Yasuke</boy><boy>Kairi</boy></children></family>}, "Family tree");
+}
+
+{
+	my $res = $parser->ToXML( [ family => { name => 'Kawasaki' },
+  [
+    [father => 'Yasushisa' ],
+    [mother => 'Chizuko' ],
+    [child =>
+        [[girl => 'Shiori']],
+        [[boy  => 'Yasuke']],
+        [[boy  => 'Kairi']]
+    ]
+  ]
+], 0);
+	is( $res, qq{<family name="Kawasaki"><father>Yasushisa</father><mother>Chizuko</mother><child><girl>Shiori</girl></child><child><boy>Yasuke</boy></child><child><boy>Kairi</boy></child></family>}, "Family tree");
+}
+
+{
+	my $res = $parser->ToXML( [ family => { name => 'Kawasaki' },
+  [
+    [father => 'Yasushisa' ],
+    [mother => 'Chizuko' ],
+    [child =>
+        'Shiori',
+        'Yasuke',
+        'Kairi'
+    ]
+  ]
+], 0);
+	is( $res, qq{<family name="Kawasaki"><father>Yasushisa</father><mother>Chizuko</mother><child>Shiori</child><child>Yasuke</child><child>Kairi</child></family>}, "Family tree");
+}
+
+{
+	my $res = $parser->ToXML( [ family => { name => 'Kawasaki' },
+  [
+    [father => 'Yasushisa' ],
+    [mother => 'Chizuko' ],
+    [child =>
+        {sex => 'f'}, 'Shiori',
+        {sex => 'm'}, 'Yasuke',
+        {sex => 'm'}, 'Kairi'
+    ]
+  ]
+], 0);
+	is( $res, qq{<family name="Kawasaki"><father>Yasushisa</father><mother>Chizuko</mother><child sex="f">Shiori</child><child sex="m">Yasuke</child><child sex="m">Kairi</child></family>}, "Family tree");
+}
+
+{
+	my $res = $parser->ToXML( [ family => { name => 'Kawasaki' },
+  [
+    [father => 'Yasushisa' ],
+    [mother => 'Chizuko' ],
+    [child =>
+        'Shiori',
+        {sex => 'm'}, 'Yasuke',
+        {sex => 'm'}, 'Kairi'
+    ]
+  ]
+], 0);
+	is( $res, qq{<family name="Kawasaki"><father>Yasushisa</father><mother>Chizuko</mother><child>Shiori</child><child sex="m">Yasuke</child><child sex="m">Kairi</child></family>}, "Family tree");
+}
+
+#formatted
+{
+	my $res = $parser->ToXML( [ family => { name => 'Kawasaki' },
+  [
+    [father => 'Yasushisa' ],
+    [mother => 'Chizuko' ],
+    [children =>
+      [
+        [girl => 'Shiori'],
+        [boy  => 'Yasuke'],
+        [boy  => 'Kairi']
+      ]
+    ]
+  ]
+], 0, ' ', '');
+	is( $res, qq{<family name="Kawasaki">
+ <father>Yasushisa</father>
+ <mother>Chizuko</mother>
+ <children>
+  <girl>Shiori</girl>
+  <boy>Yasuke</boy>
+  <boy>Kairi</boy>
+ </children>
+</family>}, "Family tree (formatted)");
+}
+
+{
+	my $res = $parser->ToXML( [ family => { name => 'Kawasaki' },
+  [
+    [father => 'Yasushisa' ],
+    [mother => 'Chizuko' ],
+    [child =>
+        [[girl => 'Shiori']],
+        [[boy  => 'Yasuke']],
+        [[boy  => 'Kairi']]
+    ]
+  ]
+], 0, ' ', '');
+	is( $res, qq{<family name="Kawasaki">
+ <father>Yasushisa</father>
+ <mother>Chizuko</mother>
+ <child>
+  <girl>Shiori</girl>
+ </child>
+ <child>
+  <boy>Yasuke</boy>
+ </child>
+ <child>
+  <boy>Kairi</boy>
+ </child>
+</family>}, "Family tree (formatted)");
+}
+
+{
+	my $res = $parser->ToXML( [ family => { name => 'Kawasaki' },
+  [
+    [father => 'Yasushisa' ],
+    [mother => 'Chizuko' ],
+    [child =>
+        'Shiori',
+        'Yasuke',
+        'Kairi'
+    ]
+  ]
+], 0, ' ', '');
+	is( $res, qq{<family name="Kawasaki">
+ <father>Yasushisa</father>
+ <mother>Chizuko</mother>
+ <child>Shiori</child>
+ <child>Yasuke</child>
+ <child>Kairi</child>
+</family>}, "Family tree (formatted)");
+}
+
+{
+	my $res = $parser->ToXML( [ family => { name => 'Kawasaki' },
+  [
+    [father => 'Yasushisa' ],
+    [mother => 'Chizuko' ],
+    [child =>
+        {sex => 'f'}, 'Shiori',
+        {sex => 'm'}, 'Yasuke',
+        {sex => 'm'}, 'Kairi'
+    ]
+  ]
+], 0, ' ', '');
+	is( $res, qq{<family name="Kawasaki">
+ <father>Yasushisa</father>
+ <mother>Chizuko</mother>
+ <child sex="f">Shiori</child>
+ <child sex="m">Yasuke</child>
+ <child sex="m">Kairi</child>
+</family>}, "Family tree (formatted)");
+}
+
+{
+	my $res = $parser->ToXML( [ family => { name => 'Kawasaki' },
+  [
+    [father => 'Yasushisa' ],
+    [mother => 'Chizuko' ],
+    [child =>
+        'Shiori',
+        {sex => 'm'}, 'Yasuke',
+        {sex => 'm'}, 'Kairi'
+    ]
+  ]
+], 0, ' ', '');
+	is( $res, qq{<family name="Kawasaki">
+ <father>Yasushisa</father>
+ <mother>Chizuko</mother>
+ <child>Shiori</child>
+ <child sex="m">Yasuke</child>
+ <child sex="m">Kairi</child>
+</family>}, "Family tree (formatted)");
 }

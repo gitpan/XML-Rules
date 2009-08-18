@@ -4,6 +4,7 @@ use warnings;
 no warnings qw(uninitialized);
 use strict;
 use Carp;
+use v5.8;
 
 require Exporter;
 our @ISA = qw(Exporter);
@@ -27,11 +28,11 @@ XML::Rules - parse XML and specify what and how to keep/process for individual t
 
 =head1 VERSION
 
-Version 1.06
+Version 1.07
 
 =cut
 
-our $VERSION = '1.06';
+our $VERSION = '1.08';
 
 =head1 SYNOPSIS
 
@@ -102,7 +103,7 @@ There are several ways to extract data from XML. One that's often used is to rea
 	foreach my $obj ($XML->forTheLifeOfMyMotherGiveMeTheFirstChildNamed("Peter")->pleaseBeSoKindAndGiveMeAllChildrenNamedSomethingLike("Jane")) {
 		my $obj2 = $obj->sorryToKeepBotheringButINeedTheChildNamed("Theophile");
 		my $birth = $obj2->whatsTheValueOfAttribute("BirthDate");
-		print "Theophile was bort at $birth\n";
+		print "Theophile was born at $birth\n";
 	}
 
 I'm exagerating of course, but you probably know what I mean. You can of course shorten the path and call just one method ... that is if you spend the time to learn one more "cool" thing starting with X. XPath.
@@ -163,7 +164,8 @@ or
 
 	<address><street>Larry Wall's St.</street><streetno>478</streetno><city>Core</city><country>The Programming Republic of Perl</country></address>
 
-And if you do not like to end up with a datastructure of plain old arrays and hashes, you can create application specific objects in the rules
+And if you do not like to end up with a datastructure of plain old arrays and hashes, you can create
+application specific objects in the rules
 
 	address => sub {
 		my $type = lc(delete $_[1]->{type});
@@ -180,7 +182,8 @@ And if you do not like to end up with a datastructure of plain old arrays and ha
 	}
 
 
-At each level in the tree structure serialized as XML you can decide what to keep, what to throw away, what to transform and then just return the stuff you care about and it will be available to the handler at the next level.
+At each level in the tree structure serialized as XML you can decide what to keep, what to throw away, what to transform and
+then just return the stuff you care about and it will be available to the handler at the next level.
 
 =head1 CONSTRUCTOR
 
@@ -194,6 +197,7 @@ At each level in the tree structure serialized as XML you can decide what to kee
 		[ encode => 'encoding specification', ]
 		[ output_encoding => 'encoding specification', ]
 		[ namespaces => \%namespace2alias_mapping, ]
+		[ handlers => \%additional_expat_handlers, ]
 		# and optionaly parameters passed to XML::Parser::Expat
 	);
 
@@ -228,6 +232,12 @@ the data and then convert the results to utf8 for the output.
 The C<encode> and C<output_enconding> affects also the C<$parser->toXML(...)>, if they are different then the data are converted from
 one encoding to the other.
 
+The C<handlers> allow you to set additional handlers for XML::Parser::Expat->setHandlers.
+Your Start, End, Char and XMLDecl handlers are evaluated before the ones installed by XML::Rules and may
+modify the values in @_, but you should be very carefull with that. Consider that experimental and if you do make
+that work the way you needed, please let me know so that I know what was it good for and can make sure
+it doesn't break in a new version.
+
 =head2 The Rules
 
 The rules option may be either an arrayref or a hashref, the module doesn't care, but if you want to use regexps to specify the groups of tags to be handled
@@ -236,19 +246,24 @@ by the same rule you should use the array ref. The rules array/hash is made of p
 	tagspecification => action
 
 where the tagspecification may be either a name of a tag, a string containing comma or pipe ( "|" ) delimited list of tag names
-or a string containing a regexp enclosed in // with optional parameters or a qr// compiled regular expressions. The tag names and tag name lists
-take precedence to the regexps, the regexps are (in case of arrayref only!!!) tested in the order in which they are specified.
+or a string containing a regexp enclosed in // optionaly followed by the regular expression modifiers or a qr// compiled regular expressions.
+The tag names and tag name lists take precedence to the regexps, the regexps are (in case of arrayrefs only!!!) tested in the order in which
+they are specified.
 
 These rules are evaluated/executed whenever a tag if fully parsed including all the content and child tags and they may access the content and attributes of the
 specified tag plus the stuff produced by the rules evaluated for the child tags.
 
 The action may be either
 
-	an undef or empty string = ignore the tag and all its children
-	a subroutine reference = the subroutine will be called to handle the tag data&contents
+	- an undef or empty string = ignore the tag and all its children
+	- a subroutine reference = the subroutine will be called to handle the tag data&contents
 		sub { my ($tagname, $attrHash, $contexArray, $parentDataArray, $parser) = @_; ...}
+	- one of the built in rules below
+
+=head3 Builtin rules
+
 	'content' = only the content of the tag is preserved and added to
-		the parent tag's hash as an attribute named after the tag
+		the parent tag's hash as an attribute named after the tag. Equivalent to:
 		sub { $_[0] => $_[1]->{_content}}
 	'content trim' = only the content of the tag is preserved, trimmed and added to
 		the parent tag's hash as an attribute named after the tag
@@ -313,6 +328,11 @@ The action may be either
 You may also add " no xmlns" at the end of all those predefined rules to strip the namespace
 alias from the $_[0] (tag name).
 
+I include the unnamed subroutines that would be equivalent to the builtin rule in case you need to add
+some tests and then behave as if one of the builtins was used.
+
+=head3 Custom rules
+
 The subroutines in the rules specification receive five parameters:
 
 	$rule->( $tag_name, \%attrs, \@context, \@parent_data, $parser)
@@ -325,14 +345,18 @@ or at least treat them with care!
 		containing the text content of the tag. If it's not a leaf tag it may
 		also contain the data returned by the rules invoked for the child tags.
 	\@context = an array containing the names of the tags enclosing the current
-		one. The parent tag name is the last element of the array.
+		one. The parent tag name is the last element of the array. (READONLY!)
 	\@parent_data = an array containing the hashes with the attributes
 		and content read&produced for the enclosing tags so far.
 		You may need to access this for example to find out the version
 		of the format specified as an attribute of the root tag. You may
 		safely add, change or delete attributes in the hashes, but all bets
 		are off if you change the number or type of elements of this array!
-	$parser = the parser object.
+	$parser = the parser object
+		you may use $parser->{pad} or $parser->{parameters} to store any data
+		you need. The first is never touched by XML::Rules, the second is set to
+		the last argument of parse() or filter() methods and reset to undef
+		before those methods exit.
 
 The subroutine may decide to handle the data and return nothing or
 tweak the data as necessary and return just the relevant bits. It may also
@@ -381,6 +405,7 @@ appended to the current value and the ones starting with '*' multiply the curren
 
 5) an odd numbered list - the last element is appended or push()ed to the parent's _content, the rest is handled as in the previous case.
 
+=head3 Different rules for different paths to tags
 
 Since 0.19 it's possible to specify several actions for a tag if you need to do something different based on the path to the tag like this:
 
@@ -393,6 +418,11 @@ Since 0.19 it's possible to specify several actions for a tag if you need to do 
 	],
 
 The path is matched against the list of parent tags joined by slashes.
+
+If you need to use more complex conditions to select the actions you have to use a single subroutine rule and implement
+the conditions within that subroutine. You have access both to the list of enclosing tags and their attribute hashes (including
+the data obtained from the rules of the already closed subtags of the enclosing tags.
+
 
 =head2 The Start Rules
 
@@ -508,7 +538,10 @@ sub new {
 		}
 	}
 
+	$self->{custom_escape} = delete($params{custom_escape}) if exists $params{custom_escape};
 	$self->{style} = delete($params{style}) || 'parser';
+
+	my $handlers = delete $params{handlers}; # need to remove it so that it doesn't end up in opt
 
 	$self->{opt}{lc $_} = $params{$_} for keys %params;
 
@@ -525,6 +558,40 @@ sub new {
 
 	require 'Encode.pm' if $self->{opt}{encode};
 	require 'Encode.pm' if $self->{opt}{output_encoding};
+
+	if ($handlers) {
+		croak qq{The 'handlers' option must be a hashref!} unless ref($handlers) eq 'HASH';
+		my %handlers = %{$handlers}; # shallow copy
+
+		for (qw(Start End Char XMLDecl)) {
+			no strict 'refs';
+			if ($handlers{$_}) {
+				my $custom = $handlers{$_};
+				my $mine = "_$_"->($self);
+#				$handlers{$_} = sub {$custom->(@_); $mine->(@_)}
+				$handlers{$_} = sub {&$custom; &$mine}
+			} else {
+				$handlers{$_} = "_$_"->($self);
+			}
+		}
+
+		for (qw(Start End Char XMLDecl)) {
+			$self->{basic_handlers}{$_} = delete $self->{other_handlers}{$_} if exists $self->{other_handlers}{$_};
+		}
+		$self->{normal_handlers} = [ %handlers ];
+	} else {
+		$self->{normal_handlers} = [
+			Start => _Start($self),
+			End => _End($self),
+			Char => _Char($self),
+			XMLDecl => _XMLDecl($self),
+		];
+	}
+	$self->{ignore_handlers} = [
+		Start => _StartIgnore($self),
+		Char => undef,
+		End => _EndIgnore($self),
+	];
 
 	return $self;
 }
@@ -588,6 +655,11 @@ sub return_nothing {
 	die "[XML::Rules] return nothing\n";
 }
 
+sub return_this {
+	my $self = shift();
+	die bless({val => [@_]}, "XML::Rules::return_this");
+}
+
 sub _run {
 	my $self = shift;
 	my $string = shift;
@@ -595,12 +667,7 @@ sub _run {
 
 	$self->{parser} = XML::Parser::Expat->new( %{$self->{for_parser}});
 
-	$self->{parser}->setHandlers(
-		Start => _Start($self),
-		End => _End($self),
-		Char => _Char($self),
-		XMLDecl => _XMLDecl($self),
-	);
+	$self->{parser}->setHandlers( @{$self->{normal_handlers}} );
 
 	$self->{data} = [];
 	$self->{context} = [];
@@ -618,8 +685,6 @@ sub _run {
 			}
 		} else {
 
-			delete $self->{normal_handlers};
-			delete $self->{ignore_handlers};
 			delete $self->{parameters};
 			$self->{parser}->release();
 
@@ -628,6 +693,12 @@ sub _run {
 
 			if ($err =~ /^\[XML::Rules\] return nothing/) {
 				return;
+			} elsif (ref $err eq 'XML::Rules::return_this') {
+				if (wantarray()) {
+					return @{$err->{val}}
+				} else {
+					return ${$err->{val}}[-1]
+				}
 			}
 
 			$err =~ s/at \S+Rules\.pm line \d+$//
@@ -635,8 +706,6 @@ sub _run {
 		}
 	};
 
-	delete $self->{normal_handlers};
-	delete $self->{ignore_handlers};
 	$self->{parser}->release();
 
 	delete $self->{parameters};
@@ -696,10 +765,12 @@ sub filter {
 		open my $FH, '>', $self->{FH};
 		$self->{FH} = $FH;
 	}
-	if ($self->{opt}{output_encoding}) {
-		print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{output_encoding}"?>\n};
-	} else {
-		print {$self->{FH}} qq{<?xml version="1.0"?>\n};
+	if (! $self->{opt}{skip_xml_version}) {
+		if ($self->{opt}{output_encoding}) {
+			print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{output_encoding}"?>\n};
+		} else {
+			print {$self->{FH}} qq{<?xml version="1.0"?>\n};
+		}
 	}
 	$self->_run($XML, @_);
 	print {$self->{FH}} "\n";
@@ -726,10 +797,12 @@ sub filterfile {
 	} elsif (ref($self->{FH}) eq 'SCALAR') {
 		open $self->{FH}, '>', $self->{FH};
 	}
-	if ($self->{opt}{output_encoding}) {
-		print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{output_encoding}"?>\n};
-	} else {
-		print {$self->{FH}} qq{<?xml version="1.0"?>\n};
+	if (! $self->{opt}{skip_xml_version}) {
+		if ($self->{opt}{output_encoding}) {
+			print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{output_encoding}"?>\n};
+		} else {
+			print {$self->{FH}} qq{<?xml version="1.0"?>\n};
+		}
 	}
 	$self->_run($IN, @_);
 	print {$self->{FH}} "\n";
@@ -930,18 +1003,7 @@ sub _Start {
 			)
 		) {
 			# ignore the tag and the ones below
-			if (exists $self->{ignore_handlers}) {
-#print "SETHANDLERS!\n";
-				$Parser->setHandlers(@{$self->{ignore_handlers}})
-			} else {
-				$self->{ignore_handlers} = [
-					Start => _StartIgnore($self),
-					Char => undef,
-					End => _EndIgnore($self),
-				];
-#print "SETHANDLERS2\n";
-				$self->{normal_handlers} = [$Parser->setHandlers(@{$self->{ignore_handlers}})];
-			}
+			$Parser->setHandlers(@{$self->{ignore_handlers}});
 			$self->{ignore_level}=1;
 
 		} else {
@@ -1452,6 +1514,14 @@ deleted. This means that the $parser does not retain a reference to the $paramet
 sub escape_value {
 	my($self, $data, $level) = @_;
 
+	if (exists $self->{custom_escape}) {
+		if (ref $self->{custom_escape}) {
+			return $self->{custom_escape}->($data,$level);
+		} else {
+			return $data;
+		}
+	}
+
 	return '' unless(defined($data) and $data ne '');
 
 	if ($self->{opt}{output_encoding} ne $self->{opt}{encode}) {
@@ -1467,22 +1537,12 @@ sub escape_value {
 	$level = $self->{opt}->{numericescape} unless defined $level;
 	return $data unless $level;
 
-	return $self->_numeric_escape($data, $level);
-}
-
-sub _numeric_escape {
-  my($self, $data, $level) = @_;
-
-  use utf8; # required for 5.6
-
-  if($self->{opt}->{numericescape} eq '2') {
-    $data =~ s/([^\x00-\x7F])/'&#' . ord($1) . ';'/gse;
-  }
-  else {
-    $data =~ s/([^\x00-\xFF])/'&#' . ord($1) . ';'/gse;
-  }
-
-  return $data;
+	if($self->{opt}->{numericescape} eq '2') {
+		$data =~ s/([^\x00-\x7F])/'&#' . ord($1) . ';'/gse;
+	} else {
+		$data =~ s/([^\x00-\xFF])/'&#' . ord($1) . ';'/gse;
+	}
+	return $data;
 }
 
 =head2 escape_value
@@ -1509,46 +1569,123 @@ You can also specify the default value in the constructor
 
 sub ToXML;*ToXML=\&toXML;
 sub toXML {
-	my ($self, $tag, $attrs, $no_close, $ident, $base) = @_;
+	my $self = shift;
+	my ($tag, $attrs, $no_close, $ident, $base);
+	if (ref $_[0]) {
+		($tag, $no_close, $ident, $base) = @_;
+	} else {
+		($tag, $attrs, $no_close, $ident, $base) = @_;
+	}
+	$ident = $self->{ident} unless defined $ident;
 
-	my $prefix = (defined ($ident) ? "\n$base" : '');
+	if ($ident eq '') {
+		$self->_toXMLnoformat(@_)
+	} else {
+		$base = '' unless defined $base;
+		$base = "\n" . $base unless $base =~ /^\n/s;
+		if (ref $tag) {
+			$self->_toXMLformat($tag, $no_close, $ident, $base)
+		} else {
+			$self->_toXMLformat($tag, $attrs, $no_close, $ident, $base)
+		}
+	}
+}
 
-	$attrs = undef if (ref $attrs eq 'HASH' and ! %{$attrs}); # ->toXML( $tagname, {}, ...)
-
-	if ($tag eq '') {
-		if (! ref($attrs)) { # ->toXML( '', $string_content, ...)
-			return $self->escape_value($attrs);
-		} elsif (ref($attrs) eq 'ARRAY') {
-			if (@$attrs) {
-				return join( '', map {
-					if (!ref($_)) {
-						$self->escape_value($_)
-					} elsif (ref($_) eq 'ARRAY' and @$_ == 2) {
-						$self->toXML($_->[0], $_->[1])
-					} else {
-						croak "The content in XML::Rules->ToXML( '', here) must be a string or an arrayref containing strings and two element arrayrefs!";
-					}
-				} @$attrs);
+sub _toXMLnoformat {
+	my ($self, $tag, $attrs, @body, $no_close);
+	if (ref $_[1]) {
+		if (ref $_[1] eq 'ARRAY') {
+			($self, $tag, $no_close) = @_;
+			($tag, $attrs, @body) = @$tag;
+			if (defined $attrs and ref $attrs ne 'HASH') {
+				unshift( @body, $attrs);
+				$attrs = undef;
+			}
+		} else {
+			croak("The first parameter to ->ToXML() must be the tag name or the arrayref containing [tagname, {attributes}, content]")
+		}
+	} else {
+		($self, $tag, $attrs, $no_close) = @_;
+		if (ref $attrs ne 'HASH') {
+			if (defined $attrs and ref $attrs eq 'ARRAY') {
+				return '' unless @$attrs;
+				($attrs,@body) = (undef,@$attrs);
 			} else {
-				return "<$attrs/>"
+				($attrs,@body) = (undef,$attrs);
 			}
 		}
 	}
 
-	if (! ref($attrs)) { # ->toXML( $tagname, $string_content, ...)
-		if ($no_close) {
-			return "<$tag>" . $self->escape_value($attrs);
-		} elsif (! defined $attrs) {
-			return "<$tag/>";
+	push @body, $attrs->{_content} if $attrs and defined $attrs->{_content};
+	$attrs = undef if (ref $attrs eq 'HASH' and (keys(%{$attrs}) == 0 or keys(%{$attrs}) == 1 and exists $attrs->{_content})); # ->toXML( $tagname, {}, ...)
+
+#use Data::Dumper;
+#print Dumper( [$tag, $attrs, \@body]);
+#sleep(1);
+
+	if ($tag eq '') {
+		# \%attrs is ignored
+		if (@body) {
+			return join( '', map {
+				if (!ref($_)) {
+					$self->escape_value($_)
+				} elsif (ref($_) eq 'ARRAY') {
+					$self->_toXMLnoformat($_, 0)
+				} else {
+					croak "The content in XML::Rules->ToXML( '', here) must be a string or an arrayref containing strings and arrayrefs!";
+				}
+			} @body);
 		} else {
-			return "<$tag>" . $self->escape_value($attrs) . "</$tag>";
+			return '';
 		}
-	} elsif (ref($attrs) eq 'ARRAY') {
-		return join( $prefix, map $self->toXML($tag, $_, 0, $ident, $base), @$attrs);
 	}
 
+	if (@body > 1) {
+		if (! $attrs) {
+			my $result = '';
+			while (@body) {
+				my $content = shift(@body);
+				if (ref $content eq 'HASH') {
+					if (@body and ref($body[0]) ne 'HASH') {
+						$result .= $self->_toXMLnoformat([$tag, $content, shift(@body)], 0)
+					} else {
+						$result .= $self->_toXMLnoformat([$tag, $content], 0)
+					}
+				} else {
+					$result .= $self->_toXMLnoformat([$tag, undef, $content], 0)
+				}
+			}
+			return $result;
+		} else {
+			my $result = '';
+			while (@body) {
+				my $content = shift(@body);
+				if (ref $content eq 'HASH') {
+					my %h = (%$attrs, %$content);
+					if (@body and ref($body[0]) ne 'HASH') {
+						$result .= $self->_toXMLnoformat([$tag, \%h, shift(@body)], 0)
+					} else {
+						$result .= $self->_toXMLnoformat([$tag, \%h], 0)
+					}
+				} else {
+					$result .= $self->_toXMLnoformat([$tag, $attrs, $content])
+				}
+			}
+			return $result;
+		}
+	}
 
-	my $content = $attrs->{_content};
+	if (! $attrs and !ref($body[0])) { # ->toXML( $tagname, $string_content, ...)
+		if ($no_close) {
+			return "<$tag>" . $self->escape_value($body[0]);
+		} elsif (! defined $body[0]) {
+			return "<$tag/>";
+		} else {
+			return "<$tag>" . $self->escape_value($body[0]) . "</$tag>";
+		}
+	}
+
+	my $content = $body[0];
 	my $result = "<$tag";
 	my $subtags = '';
 	foreach my $key (sort keys %$attrs) {
@@ -1557,13 +1694,13 @@ sub toXML {
 			if (ref $attrs->{$key} eq 'ARRAY') {
 				if (@{$attrs->{$key}}) {
 					foreach my $subtag (@{$attrs->{$key}}) {
-						$subtags .= $prefix . $ident . $self->toXML($key, $subtag, 0, $ident, $base.$ident);
+						$subtags .= $self->_toXMLnoformat($key, $subtag, 0);
 					}
 				} else {
-					$subtags .= $prefix . $ident . "<$key/>";
+					$subtags .= "<$key/>";
 				}
 			} elsif (ref $attrs->{$key} eq 'HASH') {
-				$subtags .= $prefix . $ident . $self->toXML($key, $attrs->{$key}, 0, $ident, $base.$ident)
+				$subtags .= $self->_toXMLnoformat($key, $attrs->{$key}, 0)
 			} else {
 				croak(ref($attrs->{$key}) . " attributes not supported in XML::Rules->toXML()!");
 			}
@@ -1582,7 +1719,7 @@ sub toXML {
 		if ($no_close) {
 			return "$result>$subtags" . $self->escape_value($content);
 		} elsif ($content eq '' and $subtags ne '') {
-			return "$result>$subtags$prefix</$tag>";
+			return "$result>$subtags</$tag>";
 		} else {
 			return "$result>$subtags" . $self->escape_value($content) ."</$tag>";
 		}
@@ -1593,11 +1730,7 @@ sub toXML {
 			if (!ref($snippet)) {
 				$result .= $self->escape_value($snippet);
 			} elsif (ref($snippet) eq 'ARRAY') {
-				if (@$snippet == 2) {
-					$result .= $self->toXML($snippet->[0], $snippet->[1]);
-				} else {
-					croak("Arrays in _content must be in format [\$tagname => \\\%attrs, ...] in XML::Rules->toXML()!");
-				}
+				$result .= $self->_toXMLnoformat($snippet, 0);
 			} else {
 				croak(ref($snippet) . " not supported in _content in XML::Rules->toXML()!");
 			}
@@ -1611,6 +1744,171 @@ sub toXML {
 		croak(ref($content) . " _content not supported in XML::Rules->toXML()!");
 	}
 }
+
+sub _toXMLformat {
+	my ($self, $tag, $attrs, @body, $no_close, $ident, $base);
+	if (ref $_[1]) {
+		if (ref $_[1] eq 'ARRAY') {
+			($self, $tag, $no_close, $ident, $base) = @_;
+			($tag, $attrs, @body) = @$tag;
+			if (defined $attrs and ref $attrs ne 'HASH') {
+				unshift( @body, $attrs);
+				$attrs = undef;
+			}
+		} else {
+			croak("The first parameter to ->ToXML() must be the tag name or the arrayref containing [tagname, {attributes}, content]")
+		}
+	} else {
+		($self, $tag, $attrs, $no_close, $ident, $base) = @_;
+		if (ref $attrs ne 'HASH') {
+			if (defined $attrs and ref $attrs eq 'ARRAY') {
+				return '' unless @$attrs;
+				($attrs,@body) = (undef,@$attrs);
+			} else {
+				($attrs,@body) = (undef,$attrs);
+			}
+		}
+	}
+
+	push @body, $attrs->{_content} if $attrs and defined $attrs->{_content};
+	$attrs = undef if (ref $attrs eq 'HASH' and (keys(%{$attrs}) == 0 or keys(%{$attrs}) == 1 and exists $attrs->{_content})); # ->toXML( $tagname, {}, ...)
+
+#use Data::Dumper;
+#print Dumper( [$tag, $attrs, \@body]);
+#sleep(1);
+
+	if ($tag eq '') {
+		# \%attrs is ignored
+		if (@body) {
+			return join( '', map {
+				if (!ref($_)) {
+					$self->escape_value($_)
+				} elsif (ref($_) eq 'ARRAY') {
+					$self->_toXMLformat($_, 0, $ident, $base)
+				} else {
+					croak "The content in XML::Rules->ToXML( '', here) must be a string or an arrayref containing strings and arrayrefs!";
+				}
+			} @body);
+		} else {
+			return '';
+		}
+	}
+
+	if (@body > 1) {
+		if (! $attrs) {
+			my $result = '';
+			while (@body) {
+				$result .= $base if $result ne '';
+				my $content = shift(@body);
+				if (ref $content eq 'HASH') {
+					if (@body and ref($body[0]) ne 'HASH') {
+						$result .= $self->_toXMLformat([$tag, $content, shift(@body)], 0, $ident, $base)
+					} else {
+						$result .= $self->_toXMLformat([$tag, $content], 0, $ident, $base)
+					}
+				} else {
+					$result .= $self->_toXMLformat([$tag, undef, $content], 0, $ident, $base)
+				}
+			}
+			return $result;
+		} else {
+			my $result = '';
+			while (@body) {
+				$result .= $base if $result ne '';
+				my $content = shift(@body);
+				if (ref $content eq 'HASH') {
+					my %h = (%$attrs, %$content);
+					if (@body and ref($body[0]) ne 'HASH') {
+						$result .= $self->_toXMLformat([$tag, \%h, shift(@body)], 0, $ident, $base)
+					} else {
+						$result .= $self->_toXMLformat([$tag, \%h], 0, $ident, $base)
+					}
+				} else {
+					$result .= $self->_toXMLformat([$tag, $attrs, $content], 0, $ident, $base)
+				}
+			}
+			return $result;
+		}
+	}
+
+	if (! $attrs and !ref($body[0])) { # ->toXML( $tagname, $string_content, ...)
+		if ($no_close) {
+			return "<$tag>" . $self->escape_value($body[0]);
+		} elsif (! defined $body[0]) {
+			return "<$tag/>";
+		} else {
+			return "<$tag>" . $self->escape_value($body[0]) . "</$tag>";
+		}
+	}
+
+	my $content = $body[0];
+	my $result = "<$tag";
+	my $subtags = '';
+	my $had_child = 0;
+	foreach my $key (sort keys %$attrs) {
+		next if $key =~ /^:/ or $key eq '_content';
+		if (ref $attrs->{$key}) {
+			if (ref $attrs->{$key} eq 'ARRAY') {
+				if (@{$attrs->{$key}}) {
+					foreach my $subtag (@{$attrs->{$key}}) {
+						$subtags .= $base . $ident . $self->_toXMLformat($key, $subtag, 0, $ident, $base.$ident);
+						$had_child = 1;
+					}
+				} else {
+					$subtags .= $base . $ident . "<$key/>";
+				}
+			} elsif (ref $attrs->{$key} eq 'HASH') {
+				$subtags .= $base . $ident . $self->_toXMLformat($key, $attrs->{$key}, 0, $ident, $base.$ident);
+				$had_child = 1;
+			} else {
+				croak(ref($attrs->{$key}) . " attributes not supported in XML::Rules->toXML()!");
+			}
+		} else {
+			$result .= qq{ $key="} . $self->escape_value($attrs->{$key}) . qq{"};
+		}
+	}
+	if (! defined $content and $subtags eq '') {
+		if ($no_close) {
+			return $result.">";
+		} else {
+			return $result."/>";
+		}
+
+	} elsif (!ref($content)) { # content is a string, not an array of strings and subtags
+		if ($no_close) {
+			return "$result>$subtags" . $self->escape_value($content);
+		} elsif ($content eq '' and $subtags ne '') {
+			return "$result>$subtags".($had_child ? $base : '')."</$tag>";
+		} else {
+			return "$result>$subtags" . $self->escape_value($content) . ($had_child ? $base : '') ."</$tag>";
+		}
+
+	} elsif (ref($content) eq 'ARRAY') {
+		$result .= ">$subtags";
+		foreach my $snippet (@$content) {
+			if (!ref($snippet)) {
+				$result .= $self->escape_value($snippet);
+			} elsif (ref($snippet) eq 'ARRAY') {
+				$result .= $base.$ident . $self->_toXMLformat($snippet, 0, $ident, $base.$ident);
+				$had_child = 1;
+			} else {
+				croak(ref($snippet) . " not supported in _content in XML::Rules->toXML()!");
+			}
+		}
+		if ($no_close) {
+			return $result;
+		} else {
+			if ($had_child) {
+				return $result.$base."</$tag>";
+			} else {
+				return $result."</$tag>";
+			}
+		}
+	} else {
+		croak(ref($content) . " _content not supported in XML::Rules->toXML()!");
+	}
+}
+
 
 sub parentsToXML {
 	my ($self, $level) = @_;
@@ -1740,15 +2038,21 @@ Stop parsing the XML, forget any data we already have and return from the $parse
 This is only supposed to be used within rules and may be called both as a method and as
 an ordinary function (it's not exported).
 
+=head2 return_this
+
+Stop parsing the XML, forget any data we already have and return the attributes passed to this subroutine
+from the $parser->parse(). This is only supposed to be used within rules and may be called both as a method
+and as an ordinary function (it's not exported).
+
 =head2 skip_rest
 
 Stop parsing the XML and return whatever data we already have from the $parser->parse().
 The rules for the currently opened tags are evaluated as if the XML contained all
 the closing tags in the right order.
 
-These two work via raising an exception, the exception is caught within the $parser->parse() and do not propagate outside.
+These three work via raising an exception, the exception is caught within the $parser->parse() and does not propagate outside.
 It's also safe to raise any other exception within the rules, the exception will be caught as well, the internal state of the $parser object
-is cleaned and the exception is rethrown.
+will be cleaned and the exception rethrown.
 
 =head2 inferRulesFromExample
 
