@@ -7,18 +7,20 @@ abstract: parse XML and specify what and how to keep/process for individual tags
 license: perl
 resources:
   license: http://dev.perl.org/licenses/
+build_requires:
+  Test::More: 0
 requires:
   XML::Parser: 2.00
   XML::Parser::Expat: 2.00
   perl: 5.008
-build_requires:
-  Test::More: 0
+configure_requires:
+  Module::Build: 0.340201
 dynamic_config: 0
 provides:
   XML::Rules:
     file: lib/XML/Rules.pm
     version: 1.08
-generated_by: Module::Build version 0.2808
+generated_by: Module::Build version 0.340201
 meta-spec:
-  url: http://module-build.sourceforge.net/META-spec-v1.2.html
-  version: 1.2
+  url: http://module-build.sourceforge.net/META-spec-v1.4.html
+  version: 1.4
