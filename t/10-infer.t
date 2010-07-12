@@ -58,6 +58,6 @@ my $got = XML::Rules::inferRulesFromExample( $XML);
 use Data::Dumper;
 print Dumper($got);
 
-is_deeply( $got, $good, "what's up?");
+is_deeply( $got, $good, "Rules as expected");
 
 

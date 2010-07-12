@@ -19,7 +19,7 @@ my $builder = Module::Build->new(
     },
     add_to_cleanup      => [ 'XML-Rules-*' ],
 	dynamic_config  => 0,
-	create_makefile_pl => 'passthrough',
+	create_makefile_pl => 'small',
     create_license  => 1,
 );
 

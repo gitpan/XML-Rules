@@ -68,3 +68,7 @@ Revision history for XML-Rules
 1.08	2009-08-18
 		Improved ToXML (supported data structures and formatting)
 		TODO: document that, see the t/03-output.t for examples for now
+
+1.10	2010-07-12
+		Added inferRulesFromDTD
+		fixed a memory leak that prevented the whole parser object from being garbage collected

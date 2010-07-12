@@ -4,7 +4,8 @@ use warnings;
 no warnings qw(uninitialized);
 use strict;
 use Carp;
-use v5.8;
+use 5.008;
+use Scalar::Util qw(weaken);
 
 require Exporter;
 our @ISA = qw(Exporter);
@@ -28,15 +29,15 @@ XML::Rules - parse XML and specify what and how to keep/process for individual t
 
 =head1 VERSION
 
-Version 1.07
+Version 1.10
 
 =cut
 
-our $VERSION = '1.08';
+our $VERSION = '1.10';
 
 =head1 SYNOPSIS
 
-    use XML::Rules;
+	use XML::Rules;
 
 	$xml = <<'*END*';
 	<doc>
@@ -260,77 +261,6 @@ The action may be either
 		sub { my ($tagname, $attrHash, $contexArray, $parentDataArray, $parser) = @_; ...}
 	- one of the built in rules below
 
-=head3 Builtin rules
-
-	'content' = only the content of the tag is preserved and added to
-		the parent tag's hash as an attribute named after the tag. Equivalent to:
-		sub { $_[0] => $_[1]->{_content}}
-	'content trim' = only the content of the tag is preserved, trimmed and added to
-		the parent tag's hash as an attribute named after the tag
-		sub { s/^\s+//,s/\s+$// for ($_[1]->{_content}); $_[0] => $_[1]->{_content}}
-	'content array' = only the content of the tag is preserved and pushed
-		to the array pointed to by the attribute
-		sub { '@' . $_[0] => $_[1]->{_content}}
-	'as is' = the tag's hash is added to the parent tag's hash
-		as an attribute named after the tag
-		sub { $_[0] => $_[1]}
-	'as is trim' = the tag's hash is added to the parent tag's hash
-		as an attribute named after the tag, the content is trimmed
-		sub { $_[0] => $_[1]}
-	'as array' = the tag's hash is pushed to the attribute named after the tag
-		in the parent tag's hash
-		sub { '@'.$_[0] => $_[1]}
-	'as array trim' = the tag's hash is pushed to the attribute named after the tag
-		in the parent tag's hash, the content is trimmed
-		sub { '@'.$_[0] => $_[1]}
-	'no content' = the _content is removed from the tag's hash and the hash
-		is added to the parent's hash into the attribute named after the tag
-		sub { delete $_[1]->{_content}; $_[0] => $_[1]}
-	'no content array' = similar to 'no content' except the hash is pushed
-		into the array referenced by the attribute
-	'as array no content' = same as 'no content array'
-	'pass' = the tag's hash is dissolved into the parent's hash,
-		that is all tag's attributes become the parent's attributes.
-		The _content is appended to the parent's _content.
-		sub { %{$_[0]}}
-	'pass no content' = the _content is removed and the hash is dissolved
-		into the parent's hash.
-		sub { delete $_[1]->{_content}; %{$_[0]}}
-	'pass without content' = same as 'pass no content'
-	'raw' = the [tagname => attrs] is pushed to the parent tag's _content.
-		You would use this style if you wanted to be able to print
-		the parent tag as XML preserving the whitespace or other textual content
-		sub { [$_[0] => $_[1]]}
-	'raw extended' = the [tagname => attrs] is pushed to the parent tag's _content
-		and the attrs are added to the parent's attribute hash with ":$tagname" as the key
-		sub { (':'.$_[0] => $_[1], [$_[0] => $_[1]])};
-	'raw extended array' = the [tagname => attrs] is pushed to the parent tag's _content
-		and the attrs are pushed to the parent's attribute hash with ":$tagname" as the key
-		sub { ('@:'.$_[0] => $_[1], [$_[0] => $_[1]])};
-	'by <attrname>' = uses the value of the specified attribute as the key when adding the
-		attribute hash into the parent tag's hash. You can specify more names, in that case
-		the first found is used.
-		sub {delete($_[1]->{name}) => $_[1]}
-	'content by <attrname>' = uses the value of the specified attribute as the key when adding the
-		tags content into the parent tag's hash. You can specify more names, in that case
-		the first found is used.
-		sub {$_[1]->{name} => $_[1]->{_content}}
-	'no content by <attrname>' = uses the value of the specified attribute as the key when adding the
-		attribute hash into the parent tag's hash. The content is dropped. You can specify more names,
-		in that case the first found is used.
-		sub {delete($_[1]->{_content}); delete($_[1]->{name}) => $_[1]}
-	'==...' = replace the tag by the specified string. That is the string will be added to
-		the parent tag's _content
-		sub { return '...' }
-	'=...' = replace the tag contents by the specified string and forget the attributes.
-		sub { return $_[0] => '...' }
-
-You may also add " no xmlns" at the end of all those predefined rules to strip the namespace
-alias from the $_[0] (tag name).
-
-I include the unnamed subroutines that would be equivalent to the builtin rule in case you need to add
-some tests and then behave as if one of the builtins was used.
-
 =head3 Custom rules
 
 The subroutines in the rules specification receive five parameters:
@@ -404,6 +334,79 @@ The values for the keys starting with '+' are added to the current value, the on
 appended to the current value and the ones starting with '*' multiply the current value.
 
 5) an odd numbered list - the last element is appended or push()ed to the parent's _content, the rest is handled as in the previous case.
+
+=head3 Builtin rules
+
+	'content' = only the content of the tag is preserved and added to
+		the parent tag's hash as an attribute named after the tag. Equivalent to:
+		sub { $_[0] => $_[1]->{_content}}
+	'content trim' = only the content of the tag is preserved, trimmed and added to
+		the parent tag's hash as an attribute named after the tag
+		sub { s/^\s+//,s/\s+$// for ($_[1]->{_content}); $_[0] => $_[1]->{_content}}
+	'content array' = only the content of the tag is preserved and pushed
+		to the array pointed to by the attribute
+		sub { '@' . $_[0] => $_[1]->{_content}}
+	'as is' = the tag's hash is added to the parent tag's hash
+		as an attribute named after the tag
+		sub { $_[0] => $_[1]}
+	'as is trim' = the tag's hash is added to the parent tag's hash
+		as an attribute named after the tag, the content is trimmed
+		sub { $_[0] => $_[1]}
+	'as array' = the tag's hash is pushed to the attribute named after the tag
+		in the parent tag's hash
+		sub { '@'.$_[0] => $_[1]}
+	'as array trim' = the tag's hash is pushed to the attribute named after the tag
+		in the parent tag's hash, the content is trimmed
+		sub { '@'.$_[0] => $_[1]}
+	'no content' = the _content is removed from the tag's hash and the hash
+		is added to the parent's hash into the attribute named after the tag
+		sub { delete $_[1]->{_content}; $_[0] => $_[1]}
+	'no content array' = similar to 'no content' except the hash is pushed
+		into the array referenced by the attribute
+	'as array no content' = same as 'no content array'
+	'pass' = the tag's hash is dissolved into the parent's hash,
+		that is all tag's attributes become the parent's attributes.
+		The _content is appended to the parent's _content.
+		sub { %{$_[1]}}
+	'pass no content' = the _content is removed and the hash is dissolved
+		into the parent's hash.
+		sub { delete $_[1]->{_content}; %{$_[1]}}
+	'pass without content' = same as 'pass no content'
+	'raw' = the [tagname => attrs] is pushed to the parent tag's _content.
+		You would use this style if you wanted to be able to print
+		the parent tag as XML preserving the whitespace or other textual content
+		sub { [$_[0] => $_[1]]}
+	'raw extended' = the [tagname => attrs] is pushed to the parent tag's _content
+		and the attrs are added to the parent's attribute hash with ":$tagname" as the key
+		sub { (':'.$_[0] => $_[1], [$_[0] => $_[1]])};
+	'raw extended array' = the [tagname => attrs] is pushed to the parent tag's _content
+		and the attrs are pushed to the parent's attribute hash with ":$tagname" as the key
+		sub { ('@:'.$_[0] => $_[1], [$_[0] => $_[1]])};
+	'by <attrname>' = uses the value of the specified attribute as the key when adding the
+		attribute hash into the parent tag's hash. You can specify more names, in that case
+		the first found is used.
+		sub {delete($_[1]->{name}) => $_[1]}
+	'content by <attrname>' = uses the value of the specified attribute as the key when adding the
+		tags content into the parent tag's hash. You can specify more names, in that case
+		the first found is used.
+		sub {$_[1]->{name} => $_[1]->{_content}}
+	'no content by <attrname>' = uses the value of the specified attribute as the key when adding the
+		attribute hash into the parent tag's hash. The content is dropped. You can specify more names,
+		in that case the first found is used.
+		sub {delete($_[1]->{_content}); delete($_[1]->{name}) => $_[1]}
+	'==...' = replace the tag by the specified string. That is the string will be added to
+		the parent tag's _content
+		sub { return '...' }
+	'=...' = replace the tag contents by the specified string and forget the attributes.
+		sub { return $_[0] => '...' }
+	'' = forget the tag's contents (after processing the rules for subtags)
+		sub { return };
+
+You may also add " no xmlns" at the end of all those predefined rules to strip the namespace
+alias from the $_[0] (tag name).
+
+I include the unnamed subroutines that would be equivalent to the builtin rule in case you need to add
+some tests and then behave as if one of the builtins was used.
 
 =head3 Different rules for different paths to tags
 
@@ -556,8 +559,7 @@ sub new {
 	$self->{opt}{normalisespaces} = 0 unless(defined($self->{opt}{normalisespaces}));
 	$self->{opt}{stripspaces} = 0 unless(defined($self->{opt}{stripspaces}));
 
-	require 'Encode.pm' if $self->{opt}{encode};
-	require 'Encode.pm' if $self->{opt}{output_encoding};
+	require 'Encode.pm' if $self->{opt}{encode} or $self->{opt}{output_encoding};
 
 	if ($handlers) {
 		croak qq{The 'handlers' option must be a hashref!} unless ref($handlers) eq 'HASH';
@@ -810,7 +812,7 @@ sub filterfile {
 }
 
 sub _XMLDecl {
-	my $self = shift;
+	weaken( my $self = shift);
 	return sub {
 		my ( $Parser, $Version, $Encoding, $Standalone) = @_;
 		$self->{opt}{original_encoding} = $Encoding
@@ -875,7 +877,7 @@ sub _findUnusedNs {
 }
 
 sub _Start {
-	my $self = shift;
+	weaken( my $self = shift);
 	my $encode = $self->{opt}{encode};
 	my $output_encoding = $self->{opt}{output_encoding};
 	return sub {
@@ -1073,7 +1075,7 @@ sub _find_rule {
 }
 
 sub _Char {
-	my $self = shift;
+	weaken( my $self = shift);
 	my $encode = $self->{opt}{encode};
 	return sub {
 		my ( $Parser, $String) = @_;
@@ -1129,7 +1131,7 @@ sub _Char {
 }
 
 sub _End {
-	my $self = shift;
+	weaken( my $self = shift);
 	return sub {
 		my ( $Parser, $Element) = @_;
 		$Element = pop @{$self->{context}}; # the element name may have been mangled by XMLNS aliasing
@@ -1369,12 +1371,38 @@ die "Unexpected \$data->{_content}={$data->{_content}} in filter outside interes
 				} else {
 					$self->{data}[-1]{$key} = $value;
 				}
+#			} elsif ($key =~ s/^\%//) {
+#				if (exists($self->{data}[-1]{$key})) {
+#					if (ref($value) eq 'HASH') {
+#						%{$self->{data}[-1]{$key}} = (%{$self->{data}[-1]{$key}}, %$value);
+#					} elsif (ref($value) eq 'ARRAY') {
+#						%{$self->{data}[-1]{$key}} = (%{$self->{data}[-1]{$key}}, @$value);
+#					} else {
+#						croak "The value of the rule return \%$key must be a hash or array ref!";
+#					}
 			} elsif ($key =~ s/^\%//) {
 				if (exists($self->{data}[-1]{$key})) {
 					if (ref($value) eq 'HASH') {
-						%{$self->{data}[-1]{$key}} = (%{$self->{data}[-1]{$key}}, %$value);
+						if ($self->{opt}{warnoverwrite}) {
+							foreach my $subkey (%$value) {
+								warn "The key '$subkey' already exists in attribute $key for tag $self->{context}[-1].\n  old value: $self->{data}[-1]{$key}{$subkey}\n new value: $value->{$subkey}\n"
+									if (exists $self->{data}[-1]{$key}{$subkey} and $self->{data}[-1]{$key}{$subkey} ne $value->{$subkey});
+								$self->{data}[-1]{$key}{$subkey} = $value->{$subkey};
+							}
+						} else {
+							%{$self->{data}[-1]{$key}} = (%{$self->{data}[-1]{$key}}, %$value);
+						}
 					} elsif (ref($value) eq 'ARRAY') {
-						%{$self->{data}[-1]{$key}} = (%{$self->{data}[-1]{$key}}, @$value);
+						if ($self->{opt}{warnoverwrite}) {
+							$value = {@$value}; # convert to hash
+							foreach my $subkey (%$value) {
+								warn "The key '$subkey' already exists in attribute $key for tag $self->{context}[-1].\n  old value: $self->{data}[-1]{$key}{$subkey}\n  new value: $value->{$subkey}\n"
+									if (exists $self->{data}[-1]{$key}{$subkey} and $self->{data}[-1]{$key}{$subkey} ne $value->{$subkey});
+								$self->{data}[-1]{$key}{$subkey} = $value->{$subkey};
+							}
+						} else {
+							%{$self->{data}[-1]{$key}} = (%{$self->{data}[-1]{$key}}, @$value);
+						}
 					} else {
 						croak "The value of the rule return \%$key must be a hash or array ref!";
 					}
@@ -1397,14 +1425,14 @@ die "Unexpected \$data->{_content}={$data->{_content}} in filter outside interes
 }
 
 sub _StartIgnore {
-	my ($self) = shift;
+	weaken( my $self = shift);
 	return sub {
 		$self->{ignore_level}++
 	}
 }
 
 sub _EndIgnore {
-	my ($self) = shift;
+	weaken( my $self = shift);
 	return sub {
 		return if --$self->{ignore_level};
 
@@ -1473,17 +1501,19 @@ the closing tags and returns the resulting structure.
 =head2 filter
 
 	$parser->filter( $string);
-	$parser->filter( $string, $OutputIOhandle [, $parameters]);
-	$parser->filter( $InputIOhandle, $OutputIOhandle [, $parameters]);
+	$parser->filter( $string, $LexicalOutputIOhandle [, $parameters]);
+	$parser->filter( $LexicalInputIOhandle, $LexicalOutputIOhandle [, $parameters]);
+	$parser->filter( $string, \*OutputIOhandle [, $parameters]);
+	$parser->filter( $LexicalInputIOhandle, \*OutputIOhandle [, $parameters]);
 	$parser->filter( $string, $OutputFilename [, $parameters]);
-	$parser->filter( $InputIOhandle, $OutputFilename [, $parameters]);
+	$parser->filter( $LexicalInputIOhandle, $OutputFilename [, $parameters]);
 	$parser->filter( $string, $StringReference [, $parameters]);
-	$parser->filter( $InputIOhandle, $StringReference [, $parameters]);
+	$parser->filter( $LexicalInputIOhandle, $StringReference [, $parameters]);
 
 Parses the XML in the string or reads and parses the XML from the opened IO handle,
 copies the tags that do not have a subroutine rule specified and do not occure under such a tag,
 executes the specified rules and prints the results to select()ed filehandle, $OutputFilename or
-$OutputIOhandle or stores them in the scalar referenced by $StringReference.
+$OutputIOhandle or stores them in the scalar referenced by $StringReference using the ->ToXML() method.
 
 The scalar or reference passed as the third parameter to the filter() method is assigned to
 $parser->{parameters} for the parsing of the file or string. Once the XML is parsed the key is
@@ -1497,7 +1527,9 @@ Just an alias to ->filter().
 
 =head2 filterfile
 
-	$parser->filterfile( $filename, $OutputIOhandle [, $parameters]);
+	$parser->filterfile( $filename);
+	$parser->filterfile( $filename, $LexicalOutputIOhandle [, $parameters]);
+	$parser->filterfile( $filename, \*OutputIOhandle [, $parameters]);
 	$parser->filterfile( $filename, $OutputFilename [, $parameters]);
 
 Parses the XML in the specified file, copies the tags that do not have a subroutine rule specified
@@ -2200,13 +2232,13 @@ sub inferRulesFromExample {
 
 =head2 inferRulesFromDTD
 
-	Dumper(XML::Rules::inferRulesFromDTD( $DTDfile, [$enableExtended]))
-	Dumper(XML::Rules->inferRulesFromDTD( $DTDfile, [$enableExtended]))
-	Dumper($parser->inferRulesFromDTD( $DTDfile, [$enableExtended]))
+	Dumper(XML::Rules::inferRulesFromDTD( $DTDorDTDfile, [$enableExtended]))
+	Dumper(XML::Rules->inferRulesFromDTD( $DTDorDTDfile, [$enableExtended]))
+	Dumper($parser->inferRulesFromDTD( $DTDorDTDfile, [$enableExtended]))
 
 The subroutine parses the DTD and infers the rules that would produce the minimal, but complete datastructure.
 It finds out what tags may be repeated, whether they contain text content, attributes etc. You may use this
-each time you are about to parse the XML, once and store the generated rules in your script or even take this
+each time you are about to parse the XML or once and store the generated rules in your script or even take this
 as the basis of a more specific set of rules.
 
 With the second parameter set to a true value, the tags included in a mixed content will use the "raw extended"
@@ -2222,7 +2254,7 @@ sub inferRulesFromDTD {
 
 	my ($DTDfile, $enable_extended) = @_;
 
-	my $DTD = XML::DTDParser::ParseDTDFile($DTDfile);
+	my $DTD = ( ($DTDfile=~ /\n/) ? XML::DTDParser::ParseDTD($DTDfile) : XML::DTDParser::ParseDTDFile($DTDfile));
 
 	my $has_mixed = 0;
 	foreach my $tag (values %$DTD) {
@@ -2250,10 +2282,12 @@ sub inferRulesFromDTD {
 				$settings{$tagname} = "raw"
 			}
 		} else {
-			if (exists $DTD->{attributes} or exists $tag->{children}) {
+			if (exists $tag->{attributes} or exists $tag->{children}) {
 				my @ids ;
-				if (exists $DTD->{attributes}) {
-					@ids = grep {$DTD->{attributes}{$_}[0] eq 'ID' and $DTD->{attributes}{$_}[0] eq '#REQUIRED'} keys %{$DTD->{attributes}};
+				if (exists $tag->{attributes}) {
+#use Data::Dumper;
+#print Dumper($tag->{attributes});
+					@ids = grep {$tag->{attributes}{$_}[0] eq 'ID' and $tag->{attributes}{$_}[1] eq '#REQUIRED'} keys %{$tag->{attributes}};
 				}
 				if (scalar(@ids) == 1) {
 					if ($has_content) {
@@ -2279,7 +2313,7 @@ sub inferRulesFromDTD {
 			} elsif ($repeated) {
 				$settings{$tagname} = "content array"
 			} else {
-				$settings{$tagname} = "content array"
+				$settings{$tagname} = "content"
 			}
 		}
 	}
@@ -2488,7 +2522,7 @@ The escape_value() method is taken with minor changes from XML::Simple.
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2006-2007 Jan Krynicky, all rights reserved.
+Copyright 2006-2010 Jan Krynicky, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
