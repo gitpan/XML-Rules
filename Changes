@@ -72,3 +72,7 @@ Revision history for XML-Rules
 1.10	2010-07-12
 		Added inferRulesFromDTD
 		fixed a memory leak that prevented the whole parser object from being garbage collected
+
+1.12	2012-10-09
+		Added support for chunk processing
+		Added remove() and only() attribute filters

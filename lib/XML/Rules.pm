@@ -29,11 +29,11 @@ XML::Rules - parse XML and specify what and how to keep/process for individual t
 
 =head1 VERSION
 
-Version 1.10
+Version 1.12
 
 =cut
 
-our $VERSION = '1.10';
+our $VERSION = '1.12';
 
 =head1 SYNOPSIS
 
@@ -402,11 +402,23 @@ appended to the current value and the ones starting with '*' multiply the curren
 	'' = forget the tag's contents (after processing the rules for subtags)
 		sub { return };
 
-You may also add " no xmlns" at the end of all those predefined rules to strip the namespace
-alias from the $_[0] (tag name).
-
 I include the unnamed subroutines that would be equivalent to the builtin rule in case you need to add
 some tests and then behave as if one of the builtins was used.
+
+=head3 Builtin rule modifiers
+
+You can add these modifiers to most rules, just add them to the string literal, at the end, separated from the base rule by a space.
+
+	no xmlns	= strip the namespace alias from the $_[0] (tag name)
+	remove(list,of,attributes) = remove all specified attributes (or keys produced by child tag rules) from the tag data
+	only(list,of,attributes) = filter the hash of attributes and keys+values produced by child tag rules in the tag data
+		to only include those specified here. In case you need to include the tag content do not forget to include
+		_content in the list!
+
+Not all modifiers make sense for all rules. For example if the  rule is 'content', it's pointless to filter the attributes, because the only one
+used will be the content anyway.
+
+The behaviour of the combination of the 'raw...' rules and the rule modifiers is UNDEFINED!
 
 =head3 Different rules for different paths to tags
 
@@ -559,13 +571,13 @@ sub new {
 	$self->{opt}{normalisespaces} = 0 unless(defined($self->{opt}{normalisespaces}));
 	$self->{opt}{stripspaces} = 0 unless(defined($self->{opt}{stripspaces}));
 
-	require 'Encode.pm' if $self->{opt}{encode} or $self->{opt}{output_encoding};
+	require 'Encode.pm' if ($self->{opt}{encode} or $self->{opt}{output_encoding});
 
 	if ($handlers) {
 		croak qq{The 'handlers' option must be a hashref!} unless ref($handlers) eq 'HASH';
 		my %handlers = %{$handlers}; # shallow copy
 
-		for (qw(Start End Char XMLDecl)) {
+		for (qw(Start End Char XMLDecl), ($self->{style} eq 'filter' ? qw(CdataStart CdataEnd) : ())) {
 			no strict 'refs';
 			if ($handlers{$_}) {
 				my $custom = $handlers{$_};
@@ -587,6 +599,9 @@ sub new {
 			End => _End($self),
 			Char => _Char($self),
 			XMLDecl => _XMLDecl($self),
+			(
+				$self->{style} eq 'filter' ? (CdataStart => _CdataStart($self), CdataEnd  => _CdataEnd ($self)) : ()
+			)
 		];
 	}
 	$self->{ignore_handlers} = [
@@ -665,6 +680,9 @@ sub return_this {
 sub _run {
 	my $self = shift;
 	my $string = shift;
+
+	croak "This parser is already busy parsing a document!" if exists $self->{parser};
+
 	$self->{parameters} = shift;
 
 	$self->{parser} = XML::Parser::Expat->new( %{$self->{for_parser}});
@@ -709,6 +727,7 @@ sub _run {
 	};
 
 	$self->{parser}->release();
+	delete $self->{parser};
 
 	delete $self->{parameters};
 	my $data; # return the accumulated data, without keeping a copy inside the object
@@ -731,12 +750,16 @@ sub _run {
 
 sub parsestring;
 *parsestring = \&parse;
+sub parse_string;
+*parse_string = \&parse;
 sub parse {
 	my $self = shift;
 	croak("This XML::Rules object may only be used as a filter!") if ($self->{style} eq 'filter');
 	$self->_run(@_);
 }
 
+sub parse_file;
+*parse_file = \&parsefile;
 sub parsefile {
 	my $self = shift;
 	croak("This XML::Rules object may only be used as a filter!") if ($self->{style} eq 'filter');
@@ -748,6 +771,8 @@ sub parsefile {
 
 sub filterstring;
 *filterstring = \&filter;
+sub filter_string;
+*filter_string = \&filter;
 sub filter {
 	my $self = shift;
 	croak("This XML::Rules object may only be used as a parser!") unless ($self->{style} eq 'filter');
@@ -760,7 +785,7 @@ sub filter {
 			no strict;
 			$self->{FH} = \*{$self->{FH}};
 		} else {
-			open my $FH, '>', $self->{FH} or croak(qq{Failed to open "$self->{FH}" for writing: $^E});
+			open my $FH, '>:utf8', $self->{FH} or croak(qq{Failed to open "$self->{FH}" for writing: $^E});
 			$self->{FH} = $FH;
 		}
 	} elsif (ref($self->{FH}) eq 'SCALAR') {
@@ -774,6 +799,7 @@ sub filter {
 			print {$self->{FH}} qq{<?xml version="1.0"?>\n};
 		}
 	}
+
 	$self->_run($XML, @_);
 	print {$self->{FH}} "\n";
 	delete $self->{FH};
@@ -793,7 +819,7 @@ sub filterfile {
 			no strict;
 			$self->{FH} = \*{$self->{FH}};
 		} else {
-			open my $FH, '>', $self->{FH} or croak(qq{Failed to open "$self->{FH}" for writing: $^E});
+			open my $FH, '>:utf8', $self->{FH} or croak(qq{Failed to open "$self->{FH}" for writing: $^E});
 			$self->{FH} = $FH;
 		}
 	} elsif (ref($self->{FH}) eq 'SCALAR') {
@@ -810,6 +836,183 @@ sub filterfile {
 	print {$self->{FH}} "\n";
 	delete $self->{FH};
 }
+
+## chunk processing
+
+sub parse_chunk {
+	my $self = shift;
+	croak("This XML::Rules object may only be used as a filter!") if ($self->{style} eq 'filter');
+	$self->_parse_or_filter_chunk(@_);
+}
+
+sub _parse_or_filter_chunk {
+	my $self = shift;
+	my $string = shift;
+
+	if (exists $self->{parser}) {
+		if (ref($self->{parser}) ne 'XML::Parser::ExpatNB') {
+			croak "This parser is already busy parsing a full document!";
+		} else {
+			if (exists $self->{chunk_processing_result}) {
+				if (defined $self->{chunk_processing_result}) {
+					if (wantarray()) {
+						return @{$self->{chunk_processing_result}}
+					} else {
+						return ${$self->{chunk_processing_result}}[-1]
+					}
+				} else {
+					return;
+				}
+			}
+
+			if (! eval {
+				$self->{parser}->parse_more($string) and 1;
+			}) {
+				my $err = $@;
+				undef $@;
+				if ($err =~ /^\[XML::Rules\] skip rest/) {
+					my (undef, $handler) = $self->{parser}->setHandlers(End => undef);
+					foreach my $tag (reverse @{$self->{context} = []}) {
+						$handler->( $self->{parser}, $tag);
+					}
+				} else {
+
+					delete $self->{parameters};
+					$self->{parser}->release();
+
+					$self->{data} = [];
+					$self->{context} = [];
+
+					if ($err =~ /^\[XML::Rules\] return nothing/) {
+						$self->{chunk_processing_result} = undef;
+						return;
+					} elsif (ref $err eq 'XML::Rules::return_this') {
+						$self->{chunk_processing_result} = $err->{val};
+						if (wantarray()) {
+							return @{$err->{val}}
+						} else {
+							return ${$err->{val}}[-1]
+						}
+					}
+
+					$err =~ s/at \S+Rules\.pm line \d+$//
+						and croak $err or die $err;
+				}
+			};
+			return 1;
+		}
+	}
+
+	$self->{parameters} = shift;
+
+	$self->{parser} = XML::Parser::ExpatNB->new( %{$self->{for_parser}});
+
+	$self->{parser}->setHandlers( @{$self->{normal_handlers}} );
+
+	$self->{data} = [];
+	$self->{context} = [];
+	$self->{_ltrim} = [0];
+
+	return $self->_parse_or_filter_chunk($string);
+}
+
+sub filter_chunk {
+	my $self = shift;
+	croak("This XML::Rules object may only be used as a parser!") unless ($self->{style} eq 'filter');
+
+	my $XML = shift;
+
+	if (!exists $self->{FH}) {
+		$self->{FH} = shift || select(); # either passed or the selected filehandle
+		if (!ref($self->{FH})) {
+			if ($self->{FH} =~ /^main::(?:STDOUT|STDERR)$/) {
+				# yeah, select sometimes returns the name of the filehandle, not the filehandle itself. eg. "main::STDOUT"
+				no strict;
+				$self->{FH} = \*{$self->{FH}};
+			} else {
+				open my $FH, '>:utf8', $self->{FH} or croak(qq{Failed to open "$self->{FH}" for writing: $^E});
+				$self->{FH} = $FH;
+			}
+		} elsif (ref($self->{FH}) eq 'SCALAR') {
+			open my $FH, '>', $self->{FH};
+			$self->{FH} = $FH;
+		}
+		if (! $self->{opt}{skip_xml_version}) {
+			if ($self->{opt}{output_encoding}) {
+				print {$self->{FH}} qq{<?xml version="1.0" encoding="$self->{opt}{output_encoding}"?>\n};
+			} else {
+				print {$self->{FH}} qq{<?xml version="1.0"?>\n};
+			}
+		}
+	}
+
+	$self->_parse_or_filter_chunk($XML, @_);
+}
+
+sub last_chunk {
+	my $self = shift;
+	my $string = shift;
+	if (exists $self->{parser}) {
+		if (ref($self->{parser}) ne 'XML::Parser::ExpatNB') {
+			if (exists $self->{FH}) { # in case it was a filter ...
+				print {$self->{FH}} "\n";
+				delete $self->{FH};
+			}
+			croak "This parser is already busy parsing a full document!";
+		} else {
+			if (exists $self->{chunk_processing_result}) {
+				if (exists $self->{FH}) { # in case it was a filter ...
+					print {$self->{FH}} "\n";
+					delete $self->{FH};
+				}
+				if (defined $self->{chunk_processing_result}) {
+					if (wantarray()) {
+						return @{$self->{chunk_processing_result}}
+					} else {
+						return ${$self->{chunk_processing_result}}[-1]
+					}
+				} else {
+					return;
+				}
+			}
+		}
+	} elsif (defined $string) {
+		return ($self->{style} eq 'filter') ? $self->filter($string,@_) : $self->parse($string); # no chunks in processing
+	} else {
+		return;
+	}
+
+	if (defined $string) {
+		$self->_parse_or_filter_chunk($string);
+	}
+
+	$self->{parser}->parse_done();
+	delete $self->{parser};
+
+	if (exists $self->{FH}) {
+		print {$self->{FH}} "\n";
+		delete $self->{FH};
+	}
+
+	delete $self->{parameters};
+	my $data; # return the accumulated data, without keeping a copy inside the object
+	($data, $self->{data}) = ($self->{data}[0], undef);
+	if (!defined(wantarray()) or ! keys(%$data)) {
+		return;
+
+	} elsif (keys(%$data) == 1 and exists(${$data}{_content})) {
+		if (ref(${$data}{_content}) eq 'ARRAY' and @{${$data}{_content}} == 1) {
+			return ${${$data}{_content}}[0]
+		} else {
+			return ${$data}{_content}
+		}
+
+	} else {
+		return $data;
+	}
+}
+
+##
 
 sub _XMLDecl {
 	weaken( my $self = shift);
@@ -1074,6 +1277,38 @@ sub _find_rule {
 	}
 }
 
+sub _CdataStart  {
+	my $self = shift;
+	my $encode = $self->{opt}{encode};
+	return $self->{style} eq 'filter'
+	? sub {
+		my ( $Parser, $String) = @_;
+
+		return if (substr( $self->{context}[-1], 0, length(STRIP)+1) eq STRIP.':');
+
+		if (! $self->{in_interesting}) {
+			print {$self->{FH}} '<![CDATA[';
+		}
+	}
+	: undef;
+}
+
+sub _CdataEnd {
+	my $self = shift;
+	my $encode = $self->{opt}{encode};
+	return $self->{style} eq 'filter'
+	? sub {
+		my ( $Parser, $String) = @_;
+
+		return if (substr( $self->{context}[-1], 0, length(STRIP)+1) eq STRIP.':');
+
+		if (! $self->{in_interesting}) {
+			print {$self->{FH}} ']]>';
+		}
+	}
+	: undef;
+}
+
 sub _Char {
 	weaken( my $self = shift);
 	my $encode = $self->{opt}{encode};
@@ -1237,9 +1472,40 @@ die "Unexpected \$data->{_content}={$data->{_content}} in filter outside interes
 
 		} else { # a predefined rule
 
-			if ($rule =~ s/(?:^| )no xmlns$//) {
+			if ($rule =~ s/(?:^| )no\s+xmlns$//) {
 				$Element =~ s/^\w+://;
-				$rule = 'as_is' if $rule eq '';
+				$rule = 'as is' if $rule eq '';
+			}
+			if ($rule =~ s/^((?:(?:no\s+)?content\s+)?by\s+(\S+))\s+remove\(([^\)]+)\)$/$1/) {
+				my $keep = $2;
+				my @remove = split /\s*,\s*/, $3;
+				foreach (@remove) {
+					next if $_ eq $keep;
+					delete $data->{$_};
+				}
+				$rule = 'as is' if $rule eq '';
+			} elsif ($rule =~ s/\s*\bremove\(([^\)]+)\)//) {
+				my @remove = split /\s*,\s*/, $1;
+				foreach (@remove) {
+					delete $data->{$_};
+				}
+				$rule = 'as is' if $rule eq '';
+			}
+			if ($rule =~ s/^((?:(?:no\s+)?content\s+)?by\s+(\S+))\s+only\(([^\)]+)\)$/$1/) {
+				my %only;
+				$only{$2} = undef;
+				@only{split /\s*,\s*/, $3} = ();
+				foreach (keys %$data) {
+					delete $data->{$_} unless exists $only{$_};
+				}
+				$rule = 'as is' if $rule eq '';
+			} elsif ($rule =~ s/\s*\bonly\(([^\)]+)\)//) {
+				my %only;
+				@only{split /\s*,\s*/, $1} = ();
+				foreach (keys %$data) {
+					delete $data->{$_} unless exists $only{$_};
+				}
+				$rule = 'as is' if $rule eq '';
 			}
 
 			if ($rule eq '') {
@@ -1273,6 +1539,9 @@ die "Unexpected \$data->{_content}={$data->{_content}} in filter outside interes
 				@results = (%$data);
 			} elsif ($rule eq 'pass no content' or $rule eq 'pass without content') {
 				delete ${$data}{_content}; @results = (%$data);
+			} elsif ($rule =~ /^pass\s+(\S+)$/) {
+                my %allowed = map {$_ => 1} split( /\s*,\s*/, $1);
+                @results = map { $_ => $data->{$_} } grep {$allowed{$_}} keys %allowed;
 
 			} elsif ($rule eq 'raw') {
 				@results = [$Element => $data];
@@ -1490,6 +1759,12 @@ deleted. This means that the $parser does not retain a reference to the $paramet
 
 Just an alias to ->parse().
 
+=head2 parse_string
+
+	$parser->parse_string( $string [, $parameters]);
+
+Just an alias to ->parse().
+
 =head2 parsefile
 
 	$parser->parsefile( $filename [, $parameters]);
@@ -1497,6 +1772,39 @@ Just an alias to ->parse().
 Opens the specified file and parses the XML and executes the rules as it encounters
 the closing tags and returns the resulting structure.
 
+=head2 parse_file
+
+	$parser->parse_file( $filename [, $parameters]);
+
+Just an alias to ->parsefile().
+
+=head2 parse_chunk
+
+	while (my $chunk = read_chunk_of_data()) {
+		$parser->parse_chunk($chunk);
+	}
+	my $data = $parser->last_chunk();
+
+This method allows you to process the XML in chunks as you receive them. The chunks do not need to be in any
+way valid ... it's fine if the chunk ends in the middle of a tag or attribute.
+
+If you need to set the $parser->{parameters}, pass it to the first call to parse_chunk() the same way you would to parse().
+The first chunk may be empty so if you need to set up the parameters, but read the chunks in a loop or in a callback, you can do this:
+
+	$parser->parse_chunk('', {foo => 15, bar => "Hello World!"});
+	while (my $chunk = read_chunk_of_data()) {
+		$parser->parse_chunk($chunk);
+	}
+	my $data = $parser->last_chunk();
+
+or
+
+	$parser->parse_chunk('', {foo => 15, bar => "Hello World!"});
+	$ua->get($url, ':content_cb' => sub { my($data, $response, $protocol) = @_; $parser->parse_chunk($data); return 1 });
+	my $data = $parser->last_chunk();
+
+The parse_chunk() returns 1 or dies, to get the accumulated data, you need to call last_chunk(). You will want to either agressively trim the data remembered
+or handle parts of the file using custom rules as the XML is being parsed.
 
 =head2 filter
 
@@ -1525,6 +1833,12 @@ deleted. This means that the $parser does not retain a reference to the $paramet
 
 Just an alias to ->filter().
 
+=head2 filter_string
+
+	$parser->filter_string( ...);
+
+Just an alias to ->filter().
+
 =head2 filterfile
 
 	$parser->filterfile( $filename);
@@ -1540,6 +1854,50 @@ referenced by $StringReference.
 The scalar or reference passed as the third parameter to the filter() method is assigned to
 $parser->{parameters} for the parsing of the file or string. Once the XML is parsed the key is
 deleted. This means that the $parser does not retain a reference to the $parameters after the parsing.
+
+=head2 filter_file
+
+Just an alias to ->filterfile().
+
+=head2 filter_chunk
+
+	while (my $chunk = read_chunk_of_data()) {
+		$parser->filter_chunk($chunk);
+	}
+	$parser->last_chunk();
+
+This method allows you to process the XML in chunks as you receive them. The chunks do not need to be in any
+way valid ... it's fine if the chunk ends in the middle of a tag or attribute.
+
+If you need to set the file to store the result to (default is the select()ed filehandle) or set the $parser->{parameters}, pass it to the first call to filter_chunk() the same way you would to filter().
+The first chunk may be empty so if you need to set up the parameters, but read the chunks in a loop or in a callback, you can do this:
+
+	$parser->filter_chunk('', "the-filtered.xml", {foo => 15, bar => "Hello World!"});
+	while (my $chunk = read_chunk_of_data()) {
+		$parser->filter_chunk($chunk);
+	}
+	$parser->last_chunk();
+
+or
+
+	$parser->filter_chunk('', "the_filtered.xml", {foo => 15, bar => "Hello World!"});
+	$ua->get($url, ':content_cb' => sub { my($data, $response, $protocol) = @_; $parser->filter_chunk($data); return 1 });
+	filter_chunk$parser->last_chunk();
+
+The filter_chunk() returns 1 or dies, you need to call last_chunk() to sign the end of the data and close the filehandles and clean the parser status.
+Make sure you do not set a rule for the root tag or other tag containing way too much data. Keep in mind that even if the parser works as a filter,
+the data for a custom rule must be kept in memory for the rule to execute!
+
+=head2 last_chunk
+
+	my $data = $parser->last_chunk();
+	my $data = $parser->last_chunk($the_last_chunk_contents);
+
+Finishes the processing of a XML fed to the parser in chunks. In case of the parser style, returns the accumulated data. In case of the filter style,
+flushes and closes the output file. You can pass the last piece of the XML to this method or call it without parameters if all the data was passed to parse_chunk()/filter_chunk().
+
+You HAVE to execute this method after call(s) to parse_chunk() or filter_chunk()! Until you do, the parser will refuse to process full documents and
+expect another call to parse_chunk()/filter_chunk()!
 
 =cut
 
@@ -1608,7 +1966,7 @@ sub toXML {
 	} else {
 		($tag, $attrs, $no_close, $ident, $base) = @_;
 	}
-	$ident = $self->{ident} unless defined $ident;
+	$ident = $self->{opt}{ident} unless defined $ident;
 
 	if ($ident eq '') {
 		$self->_toXMLnoformat(@_)
@@ -2285,8 +2643,6 @@ sub inferRulesFromDTD {
 			if (exists $tag->{attributes} or exists $tag->{children}) {
 				my @ids ;
 				if (exists $tag->{attributes}) {
-#use Data::Dumper;
-#print Dumper($tag->{attributes});
 					@ids = grep {$tag->{attributes}{$_}[0] eq 'ID' and $tag->{attributes}{$_}[1] eq '#REQUIRED'} keys %{$tag->{attributes}};
 				}
 				if (scalar(@ids) == 1) {
@@ -2422,7 +2778,7 @@ It is possible to specify an empty alias, so eg. in case you are processing a SO
 and know the tags defined by SOAP do not colide with the tags in the enclosed XML
 you may simplify the parsing by removing all namespace aliases.
 
-You can control the behaviour with respect to othe namespaces that you did not include
+You can control the behaviour with respect to the namespaces that you did not include
 in your mapping by setting the "alias" for the special pseudonamespace '*'. The possible values
 of the "alias"are: "warn" (default), "keep", "strip", "" and "die".
 
@@ -2460,7 +2816,7 @@ the tag(s) you'd specify in XML::Twig's twig_roots.
 
 =head1 Unrelated tricks
 
-If you need to parse a XML file without the top-most tag (something that each and any sane person would allow,
+If you need to parse a XML file without the root tag (something that each and any sane person would allow,
 but the XML comitee did not), you can parse
 
   <!DOCTYPE doc [<!ENTITY real_doc SYSTEM "$the_file_name">]><doc>&real_doc;</doc>
@@ -2522,11 +2878,13 @@ The escape_value() method is taken with minor changes from XML::Simple.
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2006-2010 Jan Krynicky, all rights reserved.
+Copyright 2006-2012 Jan Krynicky, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the same terms as Perl itself.
 
 =cut
+
+# if I ever attempt to switch to SAX I want to look at XML::Handler::Trees
 
 1; # End of XML::Rules
