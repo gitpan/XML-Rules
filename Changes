@@ -76,3 +76,6 @@ Revision history for XML-Rules
 1.12	2012-10-09
 		Added support for chunk processing
 		Added remove() and only() attribute filters
+
+1.13	2012-10-11
+		Fixed dependency on XML::DTDParser in tests

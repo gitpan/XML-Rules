@@ -29,11 +29,11 @@ XML::Rules - parse XML and specify what and how to keep/process for individual t
 
 =head1 VERSION
 
-Version 1.12
+Version 1.13
 
 =cut
 
-our $VERSION = '1.12';
+our $VERSION = '1.13';
 
 =head1 SYNOPSIS
 

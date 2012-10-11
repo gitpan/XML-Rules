@@ -6,6 +6,8 @@ use Data::Dump qw(pp);
 
 use XML::Rules;
 
+SKIP: {
+	skip "XML::DTDParser not installed, skipping the tests", 5 unless eval "use XML::DTDParser; 1";
 {
 	my $DTD = <<'*END*';
 <!ELEMENT Locales ( LOCALE+ ) >
@@ -434,4 +436,5 @@ use XML::Rules;
 #	pp($got);
 
 	is_deeply( $got, $good, "rules as expected");
+}
 }

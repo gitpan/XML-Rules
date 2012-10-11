@@ -9,11 +9,13 @@ my $builder = Module::Build->new(
     dist_author         => 'Jan Krynicky <Jenda@CPAN.org>',
     dist_version_from   => 'lib/XML/Rules.pm',
 	requires => {
-                  'perl'          => '5.008',
-                  'XML::Parser'  => '2.00',
-                  'XML::Parser::Expat' => '2.00',
-#                  'Encode' => '2.0', # in core
-                 },
+		'perl'          => '5.008',
+		'XML::Parser'  => '2.00',
+		'XML::Parser::Expat' => '2.00',
+    },
+	recommends => {
+		'XML::DTDParser' => '2.00',
+	},
     build_requires => {
         'Test::More' => 0,
     },
