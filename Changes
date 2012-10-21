@@ -79,3 +79,6 @@ Revision history for XML-Rules
 
 1.13	2012-10-11
 		Fixed dependency on XML::DTDParser in tests
+
+1.14	2012-10-21
+		Removed frogotten debug print and Data::Dump dependency in a test

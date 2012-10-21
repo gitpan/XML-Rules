@@ -2,7 +2,7 @@
 use strict;
 use warnings;
 use Test::More tests => 5;
-use Data::Dump qw(pp);
+#use Data::Dump qw(pp);
 
 use XML::Rules;
 
