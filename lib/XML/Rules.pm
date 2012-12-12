@@ -29,11 +29,11 @@ XML::Rules - parse XML and specify what and how to keep/process for individual t
 
 =head1 VERSION
 
-Version 1.14
+Version 1.15
 
 =cut
 
-our $VERSION = '1.14';
+our $VERSION = '1.15';
 
 =head1 SYNOPSIS
 
@@ -664,6 +664,51 @@ sub _xpath2re {
 	return qr{$s$};
 }
 
+sub _import_usage {
+	croak
+"Usage: use XML::Rules subroutine_name => {method => '...', rules => {...}, ...};
+   or  use XML::Rules inferRules => 'file/path.dtd';
+   or  use XML::Rules inferRules => 'file/path.xml';
+   or  use XML::Rules inferRules => ['file/path1.xml','file/path2.xml'];"
+}
+
+sub import {
+	my $class = shift();
+	return unless @_;
+	_import_usage() unless scalar(@_) % 2 == 0;
+	my $caller_pack = caller;
+	while (@_) {
+		my $subname = shift;
+		my $params = shift;
+
+		if (lc($subname) eq 'inferrules') {
+			require Data::Dumper;
+			local $Data::Dumper::Terse = 1;
+			local $Data::Dumper::Indent = 1;
+			if (ref $params) {
+				if (ref $params eq 'ARRAY') {
+					print Data::Dumper::Dumper(inferRulesFromExample(@$params))
+				} else {
+					_import_usage()
+				}
+			} elsif ($params =~ /\.dtd$/i) {
+				print Data::Dumper::Dumper(inferRulesFromDTD($params))
+			} else {
+				print Data::Dumper::Dumper(inferRulesFromExample($params))
+			}
+		} else {
+			_import_usage()
+				unless !ref($subname) and ref($params) eq 'HASH' and $params->{method} and $params->{rules};
+
+			my $method = delete $params->{method};
+			my $parser = XML::Rules->new(%$params);
+
+			no strict 'refs';
+			*{$caller_pack . '::' . $subname} = sub {unshift @_, $parser; goto &$method; };
+		}
+	}
+}
+
 sub skip_rest {
 	die "[XML::Rules] skip rest\n";
 }
@@ -753,6 +798,10 @@ sub parsestring;
 sub parse_string;
 *parse_string = \&parse;
 sub parse {
+	if (!ref $_[0] and $_[0] eq 'XML::Rules') {
+		my $parser = &new; # get's the current @_
+		return sub {unshift @_, $parser; goto &parse;}
+	}
 	my $self = shift;
 	croak("This XML::Rules object may only be used as a filter!") if ($self->{style} eq 'filter');
 	$self->_run(@_);
@@ -761,6 +810,10 @@ sub parse {
 sub parse_file;
 *parse_file = \&parsefile;
 sub parsefile {
+	if (!ref $_[0] and $_[0] eq 'XML::Rules') {
+		my $parser = &new; # get's the current @_
+		return sub {unshift @_, $parser; goto &parsefile;}
+	}
 	my $self = shift;
 	croak("This XML::Rules object may only be used as a filter!") if ($self->{style} eq 'filter');
 	my $filename = shift;
@@ -774,6 +827,10 @@ sub filterstring;
 sub filter_string;
 *filter_string = \&filter;
 sub filter {
+	if (!ref $_[0] and $_[0] eq 'XML::Rules') {
+		my $parser = &new; # get's the current @_
+		return sub {unshift @_, $parser; goto &filter;}
+	}
 	my $self = shift;
 	croak("This XML::Rules object may only be used as a parser!") unless ($self->{style} eq 'filter');
 
@@ -806,6 +863,10 @@ sub filter {
 }
 
 sub filterfile {
+	if (!ref $_[0] and $_[0] eq 'XML::Rules') {
+		my $parser = &new; # get's the current @_
+		return sub {unshift @_, $parser; goto &filterfile;}
+	}
 	my $self = shift;
 	croak("This XML::Rules object may only be used as a parser!") unless ($self->{style} eq 'filter');
 
@@ -1739,7 +1800,7 @@ sub _add_content {
 	}
 }
 
-=head1 METHODS
+=head1 INSTANCE METHODS
 
 =head2 parse
 
@@ -1960,6 +2021,9 @@ You can also specify the default value in the constructor
 sub ToXML;*ToXML=\&toXML;
 sub toXML {
 	my $self = shift;
+	if (!ref($self) and $self eq 'XML::Rules') {
+		$self = XML::Rules->new(rules=>{}, ident => '  ');
+	}
 	my ($tag, $attrs, $no_close, $ident, $base);
 	if (ref $_[0]) {
 		($tag, $no_close, $ident, $base) = @_;
@@ -2444,6 +2508,32 @@ These three work via raising an exception, the exception is caught within the $p
 It's also safe to raise any other exception within the rules, the exception will be caught as well, the internal state of the $parser object
 will be cleaned and the exception rethrown.
 
+=head1 CLASS METHODS
+
+=head2 parse
+
+When called as a class method, parse() accepts the same parameters as new(), instantiates a new parser object
+and returns a subroutine reference that calls the parse() method on that instance.
+
+  my $parser = XML::Rules->new(rules => \%rules);
+  my $data = $parser->parse($xml);
+
+becomes
+
+  my $read_data = XML::Rules->parse(rules => \%rules);
+  my $data = $read_data->($xml);
+
+or
+
+  sub read_data;
+  *read_data = XML::Rules->parse(rules => \%rules);
+  my $data = read_data($xml);
+
+=head2 parsestring, parsefile, parse_file, filter, filterstring, filter_string, filterfile, filter_file
+
+All these methods work the same way as parse() when used as a class method. They accept the same parameters as new(),
+instantiate a new object and return a subroutine reference that calls the respective method.
+
 =head2 inferRulesFromExample
 
 	Dumper(XML::Rules::inferRulesFromExample( $fileOrXML, $fileOrXML, $fileOrXML, ...)
@@ -2608,6 +2698,7 @@ This subroutine requires the XML::DTDParser module!
 =cut
 
 sub inferRulesFromDTD {
+	shift(@_) if $_[0] eq 'XML::Rules' or ref($_[0]);
 	require XML::DTDParser;
 
 	my ($DTDfile, $enable_extended) = @_;
@@ -2698,7 +2789,11 @@ sub inferRulesFromDTD {
 	return \%compressed;
 }
 
-=head1 Properties
+=head2 toXML / ToXML
+
+The ToXML() method may be called as a class/static method as well. In that case the default identation is two spaces and the output encoding is utf8.
+
+=head1 PROPERTIES
 
 =head2 parameters
 
@@ -2715,6 +2810,58 @@ circumstances. If you need to share some data between the rules and do not want 
 by applying the rules you are free to use this key.
 
 You should refrain from modifying or accessing other properties of the XML::Rules object!
+
+=head1 IMPORTS
+
+When used without parameters, the module does not export anything into the caller's namespace. When used with parameters
+it either infers and prints a set of rules from a DTD or example(s) or instantiates a parser
+and exports a subroutine calling the specified method similar to the parse() and other methods when called as class methods:
+
+  use XML::Rules inferRules => 'c:\temp\example.xml';
+  use XML::Rules inferRules => 'c:\temp\ourOwn.dtd';
+  use XML::Rules inferRules => ['c:\temp\example.xml', c:\temp\other.xml'];
+  use XML::Rules
+    read_data => {
+	  method => 'parse',
+	  rules => { ... },
+	  ...
+	};
+  use XML::Rules ToXML => {
+    method => 'ToXML',
+    rules => {}, # the option is required, but may be empty
+    ident => '   '
+  };
+  ...
+  my $data => read_data($xml);
+  print ToXML(
+    rootTag => {
+      thing => [
+        {Name => "english", child => [7480], otherChild => ['Hello world']},
+        {Name => "espanol", child => [7440], otherChild => ['Hola mundo']},
+    ]
+  });
+
+
+Please keep in mind that the use statement is executed at "compile time", which means that the variables declared and assigned above the statement
+do not have the value yet! This is wrong!
+
+  my %rules = ( _default => 'content', foo => 'as is', ...};
+  use XML::Rules
+    read_data => {
+      method => 'parse',
+      rules => \%rules,
+      ...
+    };
+
+You can use the inferRules form the command line like this:
+
+  perl -e "use XML::Rules inferRules => 'c:\temp\example.xml'"
+
+or this:
+
+  perl -MXML::Rules=inferRules,c:\temp\example.xml -e 1
+
+or use the included xml2XMLRules.pl and dtd2XMLRules.pl scripts.
 
 =head1 Namespace support
 
@@ -2784,8 +2931,8 @@ of the "alias"are: "warn" (default), "keep", "strip", "" and "die".
 
 warn: whenever an unknown namespace is encountered, XML::Rules prints a warning.
 The xmlns:XX attributes and the XX: aliases are retained for these namespaces.
-If the alias clashes with one specified by your mapping it will be changed in all places.
-The xmlns="..." referencing an unexpected namespace are changed to xmlns:nsN
+If the alias clashes with one specified by your mapping it will be changed in all places,
+the xmlns="..." referencing an unexpected namespace are changed to xmlns:nsN
 and the alias is added to the tag names included.
 
 keep: this works just like the "warn" except for the warning.
@@ -2806,11 +2953,11 @@ You may view the module either as a XML::Simple on steriods and use it to build 
 similar to the one produced by XML::Simple with the added benefit of being able
 to specify what tags or attributes to ignore, when to take just the content, what to store as an array etc.
 
-Or you could view it as yet another event based XML parser that differs from all the others only in one thing.
+You could also view it as yet another event based XML parser that differs from all the others only in one thing.
 It stores the data for you so that you do not have to use globals or closures and wonder where to attach
 the snippet of data you just received onto the structure you are building.
 
-You can use it in a way similar to XML::Twig with simplify(), specify the rules to transform the lower
+You can use it in a way similar to XML::Twig with simplify(): specify the rules to transform the lower
 level tags into a XML::Simple like (simplify()ed) structure and then handle the structure in the rule for
 the tag(s) you'd specify in XML::Twig's twig_roots.
 

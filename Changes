@@ -82,3 +82,7 @@ Revision history for XML-Rules
 
 1.14	2012-10-21
 		Removed frogotten debug print and Data::Dump dependency in a test
+
+1.15	2012-12-12
+		Added imports and ability to call methods as class methods to get a subroutine reference
+		Added inferRules as a use statement parameter
