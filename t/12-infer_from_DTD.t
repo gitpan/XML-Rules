@@ -30,7 +30,7 @@ SKIP: {
 		"#stripspaces" => 7,
 		LOCALE => "no content by ID",
 		Locales => "no content",
-		"NAME,SHORTDATE,ACTIVE,CODE,LONGDATE" => "content",
+		"ACTIVE,CODE,LONGDATE,NAME,SHORTDATE" => "content",
 	};
 	my $got = XML::Rules::inferRulesFromDTD( $DTD);
 
@@ -97,10 +97,12 @@ SKIP: {
 
 	my $good = {
 		"#stripspaces" => 7,
-		"FIELDNOTES,RQBASICVALIDATION,RQSPECIFICVALIDATION,SECTION,STATIC,FIELDTITLE,USERWILLSEE,SPECIFICVALIDATIONPARAM,FIELDLENGTH,DESC,VALUE,BASICVALIDATIONPARAM,RETAINVALUE,SEQUENCENO,BASICVALIDATION,SITEFIELDREQUIRED,EDITSTYLE,SPECIFICVALIDATION" => "content",
+		"BASICVALIDATION,BASICVALIDATIONPARAM,DESC,EDITSTYLE,FIELDLENGTH,FIELDNOTES,FIELDTITLE,RETAINVALUE,"
+		. "RQBASICVALIDATION,RQSPECIFICVALIDATION,SECTION,SEQUENCENO,SITEFIELDREQUIRED,SPECIFICVALIDATION,"
+		. "SPECIFICVALIDATIONPARAM,STATIC,USERWILLSEE,VALUE" => "content",
 		"LOCALE" => "as array no content",
-		"TRANSLATE,InputFields" => "no content",
-		"PULLDOWN,FIELD" => 'no content by ID',
+		"InputFields,TRANSLATE" => "no content",
+		"FIELD,PULLDOWN" => 'no content by ID',
 	};
 
 	my $got = XML::Rules::inferRulesFromDTD( $DTD);
@@ -128,7 +130,7 @@ SKIP: {
 		"#stripspaces" => 7,
 		Bar => "as is",
 		Job => "as array no content",
-		"Jobs,Foo" => "no content",
+		"Foo,Jobs" => "no content",
 		Text => "content",
 	};
 
@@ -162,8 +164,8 @@ SKIP: {
 	my $good = {
 		"#stripspaces"    => 7,
 		"data,wddxPacket" => "no content",
-		"recordset,field" => "as array no content",
-		"string,header"   => "content",
+		"field,recordset" => "as array no content",
+		"header,string"   => "content",
 	};
 
 	my $got = XML::Rules::inferRulesFromDTD( $DTD);
@@ -412,23 +414,23 @@ SKIP: {
 
 	my $good = {
 		"#stripspaces" => 0,
-		'JobPositionDescription,PostedBy,EndDate,OTStatus,BillRate,Pay,QualificationsPreferred,JobPositionInformation,Schedule,'
-			.'Industry,DeliveryAddress,FullTime,Temporary,PostDetail,DirectHireOrContract,JobPositionPosting,JobPositionRequirements,'
-			.'StartDate,Duration,QualificationsRequired,ApplicationMethods,WorkEnvironment,LocationSummary,AssignmentStartDate,'
-			.'AssignmentEndDate,CompensationDescription,Classification,PartTime,PersonName,BenefitsDescription,ProcurementInformation,'
-			.'EssentialFunctions,TravelRequired' => "no content",
-		"NAICS,Bonus,SalaryMonthly,RatePerDay,FamilyName,P,RatePerHour,HiringOrgId,JobPositionPostingId,FormattedName,LI,Affix,"
-			."ReportingData,SalaryAnnual" => "as array",
-		"PercentageOfTime,Extension,MiddleName,ExpensesAccepted,EEOStatement,ShiftDifferential,Date,AreaCode,Temp,Unit,NumberToFill,"
-			."E-mail,TempToPerm,HiringOrgName,IntlCode,WorkEligibilityStatus,StartTime,Organization,Percentage,DirectHire,StreetName,"
-			."EndTime,BuildingNumber,CountryCode,CurrentFlag,TelNumber,LegalName,Contract,URL,PostalCode,PositionTitle,PostOfficeBox,"
-			."HoursPerWeek,PreferredGivenName,Exempt,OrganizationName,TermLength,Municipality,JobPositionTitle,NonExempt,Regular,"
-			."JobPositionPurpose" => "content",
-		"Qualification,Link,Img" => "raw",
-		"Rate,RelocationAmount,SummaryText,FlatFee" => "as is",
-		"Recipient,JobPositionLocation,ByPhone,InPerson,VoiceNumber,PostalAddress,ByMail,HiringOrg,ByFax,Contact,UL,ByEmail,"
-			."FaxNumber,DayOfWeek,PagerNumber,HowToApply,ByWeb,OrganizationalUnit,TTDNumber" => "as array no content",
-		"Region,AddressLine,WebSite,GivenName,AdditionalText,Description" => "content array",
+		'ApplicationMethods,AssignmentEndDate,AssignmentStartDate,BenefitsDescription,BillRate,Classification,CompensationDescription,'
+		. 'DeliveryAddress,DirectHireOrContract,Duration,EndDate,EssentialFunctions,FullTime,Industry,JobPositionDescription,'
+		. 'JobPositionInformation,JobPositionPosting,JobPositionRequirements,LocationSummary,OTStatus,PartTime,Pay,PersonName,'
+		. 'PostDetail,PostedBy,ProcurementInformation,QualificationsPreferred,QualificationsRequired,Schedule,StartDate,'
+		. 'Temporary,TravelRequired,WorkEnvironment' => "no content",
+		"Affix,Bonus,FamilyName,FormattedName,HiringOrgId,JobPositionPostingId,LI,NAICS,P,RatePerDay,RatePerHour,ReportingData,"
+		. "SalaryAnnual,SalaryMonthly" => "as array",
+		"AreaCode,BuildingNumber,Contract,CountryCode,CurrentFlag,Date,DirectHire,E-mail,EEOStatement,EndTime,Exempt,"
+		. "ExpensesAccepted,Extension,HiringOrgName,HoursPerWeek,IntlCode,JobPositionPurpose,JobPositionTitle,"
+		. "LegalName,MiddleName,Municipality,NonExempt,NumberToFill,Organization,OrganizationName,Percentage,"
+		. "PercentageOfTime,PositionTitle,PostOfficeBox,PostalCode,PreferredGivenName,Regular,ShiftDifferential,"
+		. "StartTime,StreetName,TelNumber,Temp,TempToPerm,TermLength,URL,Unit,WorkEligibilityStatus" => "content",
+		"Img,Link,Qualification" => "raw",
+		"FlatFee,Rate,RelocationAmount,SummaryText" => "as is",
+		"ByEmail,ByFax,ByMail,ByPhone,ByWeb,Contact,DayOfWeek,FaxNumber,HiringOrg,HowToApply,InPerson,JobPositionLocation,"
+		. "OrganizationalUnit,PagerNumber,PostalAddress,Recipient,TTDNumber,UL,VoiceNumber" => "as array no content",
+		"AdditionalText,AddressLine,Description,GivenName,Region,WebSite" => "content array",
 	};
 
 	my $got = XML::Rules::inferRulesFromDTD( $DTD);

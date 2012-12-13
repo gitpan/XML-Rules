@@ -29,11 +29,11 @@ XML::Rules - parse XML and specify what and how to keep/process for individual t
 
 =head1 VERSION
 
-Version 1.15
+Version 1.16
 
 =cut
 
-our $VERSION = '1.15';
+our $VERSION = '1.16';
 
 =head1 SYNOPSIS
 
@@ -698,9 +698,12 @@ sub import {
 			}
 		} else {
 			_import_usage()
-				unless !ref($subname) and ref($params) eq 'HASH' and $params->{method} and $params->{rules};
+				unless !ref($subname) and ref($params) eq 'HASH';
 
-			my $method = delete $params->{method};
+			my $method = delete $params->{method} || $subname;
+			if (!$params->{rules} && $method =~ /^[tT]oXML$/) {
+				$params->{rules} = {};
+			}
 			my $parser = XML::Rules->new(%$params);
 
 			no strict 'refs';
@@ -2671,7 +2674,7 @@ sub inferRulesFromExample {
 	}
 
 	foreach my $tags (values %short_rules) {
-		$tags = join ',', @$tags;
+		$tags = join ',', sort @$tags;
 	}
 	%short_rules = reverse %short_rules;
 
@@ -2776,7 +2779,7 @@ sub inferRulesFromDTD {
 		}
 
 		while (my ($option, $tags) = each %tmp) {
-			$compressed{join ',', @$tags} = $option
+			$compressed{join ',', sort @$tags} = $option
 		}
 	}
 
@@ -2852,6 +2855,12 @@ do not have the value yet! This is wrong!
       rules => \%rules,
       ...
     };
+
+If you do not specify the method, then the method named the same as the import is assumed. You also do not have to specify the rules option for
+the ToXML method as it is not used anyway:
+
+  use XML::Rules ToXML => { ident => '  ' };
+  use XML::Rules parse => {stripspaces => 7, rules => { ... }};
 
 You can use the inferRules form the command line like this:
 
